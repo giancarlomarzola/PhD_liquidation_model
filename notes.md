@@ -62,4 +62,4 @@ ctrl+shift+v to see preview
 - ID
 
 ### Methods
-- Execute Liquidations
+- Execute Liquidation
