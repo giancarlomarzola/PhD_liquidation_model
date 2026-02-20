@@ -1,4 +1,4 @@
-from market_env.constants import (
+from market_env.parameters import (
     coll_token, debt_token, initial_coll_price, initial_debt_price,
     closing_factor, liquidation_bonus, liquidation_threshold, 
     time_steps, number_of_users, mu, sigma, participation_proportion, total_collateral_usd
