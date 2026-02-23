@@ -121,7 +121,7 @@ class Wallet:
             f"{indent}Liquidator: {self.is_liquidator}\n"
             f"{indent}Balances:\n"
             f"{balances_str}\n"
-            f"Health Factor: {self.health_factor:.4f}\n"
+            f"{indent}Health Factor: {self.health_factor:.4f}\n"
         )
 
     @property
