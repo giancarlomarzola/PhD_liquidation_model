@@ -8,6 +8,39 @@ from __future__ import annotations
     # Figuring out what parameters to use for simulation
 
 class DefiEnv:
+    """
+    Global simulation environment representing the DeFi system state.
+
+    Acts as an abstract blockchain layer coordinating
+    tokens, wallets, and lending pools. It maintains global state variables
+    such as block number and asset prices, and provides the shared context
+    within which all agents and protocols interact.
+
+    It is the single source of truth for the market-wide state
+    and is responsible for advancing time and propagating price updates
+    through the system.
+
+    Responsibilities
+    ----------------
+    - Registry of all tokens in the system
+    - Registry of all wallets (agents)
+    - Registry of all lending pools
+    - Tracking of current block number
+    - Determination of token prices at each block
+    
+    Parameters
+    ----------
+    blocknumber : int, optional
+        Initial block number of the simulation.
+    tokens : dict[str, Token], optional
+        Mapping of token symbol to Token instance.
+    prices : dict[str, float], optional
+        Mapping of token symbol to current price.
+    wallets : dict[str, Wallet], optional
+        Mapping of wallet identifier to Wallet instance.
+    lending_pools : dict[str, LendingPool], optional
+        Mapping of underlying token symbol to LendingPool instance.
+    """
     def __init__(
         self,
         blocknumber: int = 0,
@@ -65,10 +98,18 @@ class Wallet:
     # Maybe: helper method to request supply_withdraw from wallet, instead of calling it from pool
 
     def __str__(self) -> str:
-        return(
-            f"{self.name} Wallet State\n"
-            + f"\tBalances: {self.balances}\n"
-            + f"\tIs Liquidator: {self.is_liquidator}"
+        indent = "    "
+        balances_str = "\n".join(
+            f"{indent*2}{token.symbol:<15}{amount:>15,.4f}"
+            for token, amount in self.balances.items()
+        ) if self.balances else f"{indent*2}None"
+        return (
+            f"{self.name} Wallet\n"
+            f"{'-'*50}\n"
+            f"{indent}Liquidator: {self.is_liquidator}\n"
+            f"{indent}Balances:\n"
+            f"{balances_str}"
+            f"\n"
         )
 
     @property
@@ -130,14 +171,12 @@ class Token:
     def mint(self, wallet: Wallet, amount: float):
         assert amount > 0
         self.total_supply += amount
-        if self not in wallet.balances:
-            wallet.balances[self] = 0.0
-        wallet.balances[self] += amount
+        wallet.balances[self] = wallet.balances.get(self, 0.0) + amount
 
     def burn(self, wallet: Wallet, amount: float):
         assert amount > 0
-        balance = wallet.balances.get(self, 0.0)
-        assert balance >= amount, f"Wallet does not have enough {self.symbol} to burn"
+        wallet_balance = wallet.balances.get(self, 0.0)
+        assert wallet_balance >= amount, f"Wallet does not have enough {self.symbol} to burn"
         self.total_supply -= amount
         wallet.balances[self] -= amount
 
@@ -184,20 +223,26 @@ class LendingPool:
         self.liquidation_threshold = liquidation_threshold
         self.closing_factor = closing_factor
         
-    # Properties: bad_debt, utilisation_rate
+    # Properties: bad_debt, utilisation_rate, supply_rate, borrow_rate
     # Methods: supply, withdraw, borrow, repay, update_borrow_lend_rates, accrue_interest, liquidate
 
     def __str__(self) -> str:
-        return(
-            f"{self.underlying_token.symbol} Pool State at block {self.env.blocknumber}\n"
-            + f"\ta_token Supply: {self.a_token.total_supply:.2f}"
-            + f"\tv_token Supply: {self.v_token.total_supply:.2f}"
-            + f"\tUtilisation Rate: {self.utilisation_rate*100:.2f}%"
-            + f"\tInterest Rate: {self.interest_rate*100:.2f}%\n"
-            + f"\tLiquidation Parameters: \t max_ltv = {self.max_ltv*100:.2f}%, liquidation_bonus = {self.liquidation_bonus*100:.2f}%, "
-            + f"liquidation_threshold = {self.liquidation_threshold*100:.2f}%, closing_factor = {self.closing_factor*100:.2f}%"
+        indent = "    "  # 4 spaces
+        return (
+            f"{self.underlying_token.symbol.upper()} LENDING POOL "
+            f"(block {self.env.blocknumber})\n"
+            f"{'-'*50}\n"
+            f"{indent}{'aToken Supply:':25}{self.a_token.total_supply:>15,.2f}\n"
+            f"{indent}{'vToken Supply:':25}{self.v_token.total_supply:>15,.2f}\n"
+            f"{indent}{'Utilisation Rate:':25}{self.utilisation_rate*100:>14.2f}%\n"
+            f"{indent}{'Interest Rate:':25}{self.interest_rate*100:>14.2f}%\n"
+            f"\n"
+            f"{indent}{'Reserve Rate:':25}{self.reserve_rate*100:>14.2f}%\n"
+            f"{indent}{'Max LTV:':25}{self.max_ltv*100:>14.2f}%\n"
+            f"{indent}{'Liquidation Bonus:':25}{self.liquidation_bonus*100:>14.2f}%\n"
+            f"{indent}{'Liquidation Threshold:':25}{self.liquidation_threshold*100:>14.2f}%\n"
+            f"{indent}{'Closing Factor:':25}{self.closing_factor*100:>14.2f}%\n"
         )
-    
     @property
     def available_liquidity(self):
         return(self.a_token.total_supply - self.v_token.total_supply)
@@ -218,7 +263,7 @@ class LendingPool:
             wallet.balances[token] -= amount
         else:
             # TODO: Check collateral is sufficient after transaction
-            wallet.balances[token] += amount
+            wallet.balances[token] = wallet_balance + amount
 
     def supply(self, wallet: Wallet, amount: float):
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
@@ -278,42 +323,75 @@ wbtc_pool = LendingPool(
     liquidation_threshold=liquidation_threshold, 
     closing_factor=closing_factor)
 
+# Create users
 Alice = Wallet(defi_env, "alice")
+Bob = Wallet(defi_env, "bob")
 
+# Provide initial wallet funds
 usdc.mint(Alice, 50_000)
-wbtc.mint(Alice, 0.1)
+#wbtc.mint(Alice, 0.01)
 
-print("\nInitial state")
-print(Alice)
-print(usdc_pool)
+#usdc.mint(Bob, 0.1)
+wbtc.mint(Bob, 2)
 
-print("\nSupply 20k")
-usdc_pool.supply(Alice, 20_000)
-print(Alice)
-print(usdc_pool)
 
-print("\nWithdraw 5k")
-usdc_pool.withdraw(Alice, 5_000)
-print(Alice)
-print(usdc_pool)
-
-print("\nBorrow 10k")
-usdc_pool.borrow(Alice, 10_000)
-print(Alice)
-print(usdc_pool)
-
-print(f"\nTotal Supplied: {Alice.total_supplied_usd}\n"
-    + f"Total Collateral: {Alice.total_collateral_usd}\n"
-    + f"Total Debt: {Alice.total_borrowed_usd}\n"
-    + f"Available Collateral: {Alice.available_collateral_usd}"
+# Initial supplies
+print(
+    f"{'='*50}\n"
+    "Initial state\n"
+    f"{'='*50}\n"
     )
-
-print("\nRepay 10k")
-usdc_pool.repay(Alice, 10_000)
 print(Alice)
+print(Bob)
 print(usdc_pool)
+print(wbtc_pool)
 
-print("\nWithdraw full a_usdc amount")
+print(
+    f"{'='*50}\n"
+    "Supplies to each pool\n"
+    f"{'='*50}\n"
+    )
+usdc_pool.supply(Alice, 50_000)
+wbtc_pool.supply(Bob, 2)
+print(Alice)
+print(Bob)
+print(usdc_pool)
+print(wbtc_pool)
+
+print(
+    f"{'='*50}\n"
+    "Borrows from each pool\n"
+    f"{'='*50}\n"
+    )
+usdc_pool.borrow(Bob, 20_000)
+wbtc_pool.borrow(Alice, 1)
+print(Alice)
+print(Bob)
+print(usdc_pool)
+print(wbtc_pool)
+
+
+print(
+    f"{'='*50}\n"
+    "Repay the borrowed amount from each pool\n"
+    f"{'='*50}\n"
+    )
+usdc_pool.repay(Bob, Bob.balances.get(usdc_pool.v_token))
+wbtc_pool.repay(Alice, Alice.balances.get(wbtc_pool.v_token))
+print(Alice)
+print(Bob)
+print(usdc_pool)
+print(wbtc_pool)
+
+
+print(
+    f"{'='*50}\n"
+    "Withdraw full amount of supplies from each pool\n"
+    f"{'='*50}\n"
+    )
 usdc_pool.withdraw(Alice, Alice.balances.get(usdc_pool.a_token))
+wbtc_pool.withdraw(Bob, Bob.balances.get(wbtc_pool.a_token))
 print(Alice)
+print(Bob)
 print(usdc_pool)
+print(wbtc_pool)
