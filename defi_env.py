@@ -71,6 +71,17 @@ class DefiEnv:
     # Properties: state_summary, prices, 
     # Methods: update_prices, act_update_react
 
+    # when moving to next block needs to trigger
+    #   - Blocknumber increase
+    #   - Price updates TODO: should it simulate prices, or should it just give them, keeping the simulation external?
+    #   - Interest accrual for aTokens and vTokens
+    #   - re-calculation of interest rates
+
+    # What it doesn't do (this should be done by the simulation, not the environment):
+    #   - Arbitrary user transactions
+    #   - User reactions to changes
+    #   - Liquidations
+
 
 class Wallet:
     def __init__(
@@ -102,25 +113,17 @@ class Wallet:
         balances_str = "\n".join(
             f"{indent*2}{token.symbol:<15}{amount:>15,.4f}"
             for token, amount in self.balances.items()
-        ) if self.balances else f"{indent*2}None"
+            if amount != 0
+        ) if any(amount != 0 for amount in self.balances.values()) else f"{indent*2}None"
         return (
             f"{self.name} Wallet\n"
             f"{'-'*50}\n"
             f"{indent}Liquidator: {self.is_liquidator}\n"
             f"{indent}Balances:\n"
-            f"{balances_str}"
-            f"\n"
+            f"{balances_str}\n"
+            f"Health Factor: {self.health_factor:.4f}\n"
         )
 
-    @property
-    def total_collateral_usd(self):
-        total = 0.0
-        for token, amount in self.balances.items():
-            if isinstance(token, aToken):
-                pool = token.pool
-                total += amount * pool.underlying_token.price * pool.max_ltv
-        return total
-    
     @property
     def total_supplied_usd(self):
         total = 0.0
@@ -140,8 +143,44 @@ class Wallet:
         return total
 
     @property
+    def total_collateral_usd(self):
+        total = 0.0
+        for token, amount in self.balances.items():
+            if isinstance(token, aToken):
+                pool = token.pool
+                total += amount * pool.underlying_token.price * pool.max_ltv
+        return total
+    
+    @property
     def available_collateral_usd(self):
         return self.total_collateral_usd - self.total_borrowed_usd
+    
+    @property
+    def health_factor(self) -> float:
+        """
+        Aave-style health factor using total_collateral_usd and total_borrowed_usd.
+        HF = (Total Collateral Value * Weighted Average Liquidation Threshold) / Total Borrow Value
+        """
+        total_collateral = self.total_collateral_usd
+        total_borrowed = self.total_borrowed_usd
+
+        if total_borrowed == 0:
+            return float('inf')
+
+        # Compute weighted average liquidation threshold
+        weighted_liquidation_threshold_sum = 0.0
+        for token, amount in self.balances.items():
+            if isinstance(token, aToken):
+                pool = token.pool
+                collateral_value = amount * pool.underlying_token.price * pool.max_ltv
+                weighted_liquidation_threshold_sum += collateral_value * pool.liquidation_threshold
+
+        weighted_avg_liquidation_threshold = (
+            weighted_liquidation_threshold_sum / total_collateral
+            if total_collateral > 0 else 0
+        )
+
+        return (total_collateral * weighted_avg_liquidation_threshold) / total_borrowed
 
 
 class Token:
@@ -299,7 +338,7 @@ liquidation_bonus = 0.05
 closing_factor = 0.5
 
 
-defi_env = DefiEnv(prices={"usdc":1.01, "wbtc":50000})
+defi_env = DefiEnv(prices={"usdc":1.0001, "wbtc":50000})
 
 usdc = Token(defi_env, "usdc")
 wbtc = Token(defi_env, "wbtc")
@@ -327,11 +366,8 @@ wbtc_pool = LendingPool(
 Alice = Wallet(defi_env, "alice")
 Bob = Wallet(defi_env, "bob")
 
-# Provide initial wallet funds
-usdc.mint(Alice, 50_000)
-#wbtc.mint(Alice, 0.01)
-
-#usdc.mint(Bob, 0.1)
+# Provide initial wallet funds (100k USD for both)
+usdc.mint(Alice, 100_000)
 wbtc.mint(Bob, 2)
 
 
@@ -348,10 +384,10 @@ print(wbtc_pool)
 
 print(
     f"{'='*50}\n"
-    "Supplies to each pool\n"
+    "Supplies to each pool (100k USD for both)\n"
     f"{'='*50}\n"
     )
-usdc_pool.supply(Alice, 50_000)
+usdc_pool.supply(Alice, 100_000)
 wbtc_pool.supply(Bob, 2)
 print(Alice)
 print(Bob)
@@ -360,11 +396,11 @@ print(wbtc_pool)
 
 print(
     f"{'='*50}\n"
-    "Borrows from each pool\n"
+    "Borrows from each pool(25k USD for both)\n"
     f"{'='*50}\n"
     )
-usdc_pool.borrow(Bob, 20_000)
-wbtc_pool.borrow(Alice, 1)
+usdc_pool.borrow(Bob, 25_000)
+wbtc_pool.borrow(Alice, 0.5)
 print(Alice)
 print(Bob)
 print(usdc_pool)
@@ -373,7 +409,7 @@ print(wbtc_pool)
 
 print(
     f"{'='*50}\n"
-    "Repay the borrowed amount from each pool\n"
+    "Repay the full borrowed amount from each pool\n"
     f"{'='*50}\n"
     )
 usdc_pool.repay(Bob, Bob.balances.get(usdc_pool.v_token))
