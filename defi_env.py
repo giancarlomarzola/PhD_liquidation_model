@@ -267,7 +267,7 @@ class Token:
     def burn(self, wallet: Wallet, amount: float):
         assert amount > 0, "Amount must be positive"
         wallet_balance = wallet.balances.get(self, 0.0)
-        assert wallet_balance >= amount, f"Wallet does not have enough {self.symbol} to burn"
+        assert wallet_balance >= amount, f"Wallet {wallet.name} does not have enough {self.symbol} to burn"
         self.total_supply = self.total_supply - amount
         wallet.balances[self] = wallet_balance - amount
 
@@ -367,11 +367,11 @@ class LendingPool:
         pool_balance = self.underlying_reserves
         wallet_balance = wallet.balances.get(token, 0.0)
         if from_wallet is True: # Wallet to Pool transaction
-            assert wallet_balance >= amount, f"Wallet does not have enough {token.symbol}"
+            assert wallet_balance >= amount, f"Wallet '{wallet.name}' does not have enough {token.symbol}"
             wallet.balances[token] = wallet_balance - amount
             self.underlying_reserves = pool_balance + amount
         else: # Pool to Wallet transaction
-            assert pool_balance >= amount, f"Pool does not have enough {token.symbol}"
+            assert pool_balance >= amount, f"{self.underlying_token.symbol} Pool does not have enough {token.symbol}"
             self.underlying_reserves = pool_balance - amount
             wallet.balances[token] = wallet_balance + amount
 
@@ -382,8 +382,9 @@ class LendingPool:
     def withdraw(self, wallet: Wallet, amount: float):
         hf_after = wallet.health_factor_after(collateral_change={self.a_token: -amount})
         assert hf_after > 1, "Withdraw would cause liquidation risk"
-        self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
+        assert wallet.balances.get(self.a_token) >= amount, f"Wallet '{wallet.name}' does not have sufficient {self.a_token.symbol} for transaction"
         self.a_token.burn(wallet, amount)
+        self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
 
     def borrow(self, wallet: Wallet, amount: float):
         hf_after = wallet.health_factor_after(debt_change={self.v_token: amount})
@@ -392,8 +393,9 @@ class LendingPool:
         self.v_token.mint(wallet, amount)
 
     def repay(self, wallet: Wallet, amount: float):
-        self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
+        assert wallet.balances.get(self.v_token) >= amount, f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction" 
         self.v_token.burn(wallet, amount)
+        self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
 
 
 
