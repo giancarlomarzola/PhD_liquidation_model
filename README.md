@@ -4,7 +4,7 @@ The protocol enables simulated users to deposit assets, earn yield, borrow again
 The purpose of this model is to assess liquidity risk on such protocols.
 
 ## Setup (uv)
-This project uses **uv** https://docs.astral.sh/uv/ for Python package management.
+This project uses **uv** (https://docs.astral.sh/uv/) for Python package management.
 To create a virtual environment for this project:
 ### 1. Install uv
 
