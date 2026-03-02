@@ -95,14 +95,11 @@ class Wallet:
         assert name not in env.wallets, f"User {name} exists"
         self.env = env
         self.env.wallets[name] = self
-
         self.balances = balances or {}
         self.name = name
         self.is_liquidator = is_liquidator
     
-    # Properties: || wealth, max_borrowable_value, 
-    # Methods: initialise_transaction, get_liquidation_candidates 
-    # Maybe: helper method to request supply_withdraw from wallet, instead of calling it from pool
+    # Methods: initialise_transaction (as a way to use LendingPool supply/withdraw/borrow/repay from Wallet?), get_liquidation_candidates 
 
     def __str__(self) -> str:
         indent = "    "
@@ -232,6 +229,10 @@ class Wallet:
         )
 
         return (total_collateral * weighted_avg_liq_threshold) / total_borrowed
+    
+    # TODO: get_liquidation_candidates
+
+    # TODO: request_liquidation
 
 
 class Token:
@@ -241,16 +242,14 @@ class Token:
         symbol: str,
         total_supply: float=0
         # Should i also keep track of who holds how much?
-    ):
+        ):
         # Add Token to defi environment
         assert symbol not in env.tokens, f"Token {symbol} exists"
         self.env = env
         self.env.tokens[symbol] = self
-
         self.symbol = symbol
         self.total_supply = total_supply
 
-    # Methods: mint, burn, transfer
     def __repr__(self):
         return self.symbol
 
@@ -296,44 +295,38 @@ class LendingPool:
         self,
         env: DefiEnv,
         underlying_token: Token,      
-        interest_rate: float,         # TODO: change to borrow and supply rate; or better: give interest rate strategy, get rates as properties
+        interest_rate_strategy: dict[str,float],  # TODO: change to interest rate strategy (variableRateSlope1, variableRateSlope2, baseVariableBorrowRate, optimalUsageRatio)
+                                        # better as dict or with each variable as its own entry?
         reserve_rate: float,
-        max_ltv: float,               # how much of supply can be used as collateral
-        liquidation_bonus: float,     # reward for liquidator (aka liquidation_penalty)
-        liquidation_threshold: float, # threshold at which liquidation can be initialised
-        closing_factor: float         # maximum % of position that can be liquidated in one transaction
-        # a_token and v_token automatically created by pool
-        # underlying_reserves initialised as 0, this way if it starts with a balance it has to be transferred in or minted to this
-    ):
-
+        max_ltv: float,                 # how much of supply can be used as collateral
+        liquidation_bonus: float,       # reward for liquidator (aka liquidation_penalty)
+        liquidation_threshold: float,   # threshold at which liquidation can be initialised
+        closing_factor: float           # maximum % of position that can be liquidated in one transaction
+        # a_token and v_token: automatically created by pool
+        # available_liquidity: initialised as 0, this way if it starts with a balance it has to be transferred in or minted to this
+        # TODO: What happens to reserve_rate funds? Do i keep a general treasury? Per pool treasury?
+        # TODO: Should i add borrowCap, supplyCap?
+        ):
         # Add Lending Pool to defi environment
         assert underlying_token.symbol not in env.lending_pools, f"Lending Pool {underlying_token.symbol} exists"
         self.env = env
         self.env.lending_pools[underlying_token.symbol] = self
-
+        # Initialise tokens
         self.underlying_token = underlying_token
-        self.underlying_reserves = 0.0
-
-        # Create supply and debt tokens
+        self.available_liquidity = 0.0
         a_symbol = f"a_{underlying_token.symbol}"
         v_symbol = f"v_{underlying_token.symbol}"
-
         assert a_symbol not in env.tokens, f"Token {a_symbol} already exists"
         assert v_symbol not in env.tokens, f"Token {v_symbol} already exists"
-
         self.a_token = aToken(env, a_symbol, self)
         self.v_token = vToken(env, v_symbol, self)
-
         # Risk and interest parameters
-        self.interest_rate = interest_rate
+            #self.interest_rate = interest_rate
         self.reserve_rate = reserve_rate
         self.max_ltv = max_ltv
         self.liquidation_bonus = liquidation_bonus
         self.liquidation_threshold = liquidation_threshold
         self.closing_factor = closing_factor
-        
-    # Properties: bad_debt, utilisation_rate, supply_rate, borrow_rate
-    # Methods: supply, withdraw, borrow, repay, update_borrow_lend_rates, accrue_interest, liquidate
 
     def __str__(self) -> str:
         indent = "    "  # 4 spaces
@@ -343,7 +336,7 @@ class LendingPool:
             f"{'-'*50}\n"
             f"{indent}{'aToken Supply:':25}{self.a_token.total_supply:>15,.2f}\n"
             f"{indent}{'vToken Supply:':25}{self.v_token.total_supply:>15,.2f}\n"
-            f"{indent}{'Underlying Supply':25}{self.underlying_reserves:>15,.2f}\n"
+            f"{indent}{'Underlying Supply':25}{self.available_liquidity:>15,.2f}\n"
             f"{indent}{'Utilisation Rate:':25}{self.utilisation_rate*100:>14.2f}%\n"
             f"{indent}{'Interest Rate:':25}{self.interest_rate*100:>14.2f}%\n"
             f"\n"
@@ -353,7 +346,11 @@ class LendingPool:
             f"{indent}{'Liquidation Threshold:':25}{self.liquidation_threshold*100:>14.2f}%\n"
             f"{indent}{'Closing Factor:':25}{self.closing_factor*100:>14.2f}%\n"
         )
-    
+
+    @property
+    def bad_debt(self): # TODO: bad_debt property
+        pass
+
     @property
     def utilisation_rate(self):
         if self.v_token.total_supply == 0 or self.a_token.total_supply==0:
@@ -363,17 +360,20 @@ class LendingPool:
         return(max(0, utilisation_rate))
 
     def _transfer(self, wallet: Wallet, token: Token, amount: float, from_wallet: bool):
+        # Helper function to handle transfers between Wallet and LendingPool in supply/withdraw/borrow/repay
         assert amount > 0, "Amount must be positive"
-        pool_balance = self.underlying_reserves
+        pool_balance = self.available_liquidity
         wallet_balance = wallet.balances.get(token, 0.0)
         if from_wallet is True: # Wallet to Pool transaction
             assert wallet_balance >= amount, f"Wallet '{wallet.name}' does not have enough {token.symbol}"
             wallet.balances[token] = wallet_balance - amount
-            self.underlying_reserves = pool_balance + amount
+            self.available_liquidity = pool_balance + amount
         else: # Pool to Wallet transaction
             assert pool_balance >= amount, f"{self.underlying_token.symbol} Pool does not have enough {token.symbol}"
-            self.underlying_reserves = pool_balance - amount
+            self.available_liquidity = pool_balance - amount
             wallet.balances[token] = wallet_balance + amount
+
+    # TODO: Add interest rates to supply/withdraw/borrow/repay, including any additional needed checks and reserve_factor consequences
 
     def supply(self, wallet: Wallet, amount: float):
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
@@ -381,14 +381,14 @@ class LendingPool:
 
     def withdraw(self, wallet: Wallet, amount: float):
         hf_after = wallet.health_factor_after(collateral_change={self.a_token: -amount})
-        assert hf_after > 1, "Withdraw would cause liquidation risk"
+        assert hf_after > 1, f"Withdraw would cause liquidation risk -- Health factor after transaction = {hf_after}"
         assert wallet.balances.get(self.a_token) >= amount, f"Wallet '{wallet.name}' does not have sufficient {self.a_token.symbol} for transaction"
         self.a_token.burn(wallet, amount)
         self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
 
     def borrow(self, wallet: Wallet, amount: float):
         hf_after = wallet.health_factor_after(debt_change={self.v_token: amount})
-        assert hf_after > 1, "Borrow would cause liquidation risk"
+        assert hf_after > 1, f"Borrow would cause liquidation risk -- Health factor after transaction = {hf_after}"
         self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
         self.v_token.mint(wallet, amount)
 
@@ -396,6 +396,11 @@ class LendingPool:
         assert wallet.balances.get(self.v_token) >= amount, f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction" 
         self.v_token.burn(wallet, amount)
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
+    
+    # TODO: Calculate interest rates from strategy
+
+    # TODO: Accrue interest - mint a_tokens and v_tokens?
+
 
 
 
@@ -403,6 +408,13 @@ class LendingPool:
 # Basic test example
 # Market with 2 tokens (USDC, WBTC)
 # ========================================================================================================================
+
+
+def print_current_state():
+    print(Alice)
+    print(Bob)
+    print(usdc_pool)
+    print(wbtc_pool)
 
 # parameters - TODO: maybe keep dictionary with these parameters for each token so I can easily access them for testing
 max_ltv = 0.73
@@ -479,7 +491,7 @@ print(Bob)
 print(usdc_pool)
 print(wbtc_pool)
 
-
+"""
 print(
     f"{'='*50}\n"
     "Repay the full borrowed amount from each pool\n"
@@ -504,3 +516,4 @@ print(Alice)
 print(Bob)
 print(usdc_pool)
 print(wbtc_pool)
+"""
