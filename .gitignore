@@ -1,5 +1,5 @@
 **/**/.DS_Store
 data/*
-!data/.gitignore
+!data/.keep
 .venv/
 __pycache__
