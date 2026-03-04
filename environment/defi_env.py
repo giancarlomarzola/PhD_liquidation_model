@@ -1,4 +1,5 @@
 from __future__ import annotations
+from parameters import pool_parameters
 
 
 # To worry about later:
@@ -294,10 +295,12 @@ class LendingPool:
     def __init__(
         self,
         env: DefiEnv,
-        underlying_token: Token,      
-        interest_rate_strategy: dict[str,float],  # TODO: change to interest rate strategy (variableRateSlope1, variableRateSlope2, baseVariableBorrowRate, optimalUsageRatio)
-                                        # better as dict or with each variable as its own entry?
-        reserve_rate: float,
+        underlying_token: Token,
+        interest_slope_1: float,        # slope of interest rate before optimal usage ratio
+        interest_slope_2: float,        # slope of interest rate after optimal usage ratio
+        interest_base_rate: float,      # interest when util_rate == 0
+        optimal_usage_ratio: float,     # kink-point of interest rate curve
+        reserve_rate: float,            # proportion of interest that is sent to treasury
         max_ltv: float,                 # how much of supply can be used as collateral
         liquidation_bonus: float,       # reward for liquidator (aka liquidation_penalty)
         liquidation_threshold: float,   # threshold at which liquidation can be initialised
@@ -321,7 +324,10 @@ class LendingPool:
         self.a_token = aToken(env, a_symbol, self)
         self.v_token = vToken(env, v_symbol, self)
         # Risk and interest parameters
-            #self.interest_rate = interest_rate
+        self.interest_slope_1 = interest_slope_1
+        self.interest_slope_2 = interest_slope_2
+        self.interest_base_rate = interest_base_rate
+        self.optimal_usage_ratio = optimal_usage_ratio
         self.reserve_rate = reserve_rate
         self.max_ltv = max_ltv
         self.liquidation_bonus = liquidation_bonus
@@ -337,8 +343,8 @@ class LendingPool:
             f"{indent}{'aToken Supply:':25}{self.a_token.total_supply:>15,.2f}\n"
             f"{indent}{'vToken Supply:':25}{self.v_token.total_supply:>15,.2f}\n"
             f"{indent}{'Underlying Supply':25}{self.available_liquidity:>15,.2f}\n"
-            f"{indent}{'Utilisation Rate:':25}{self.utilisation_rate*100:>14.2f}%\n"
-            f"{indent}{'Interest Rate:':25}{self.interest_rate*100:>14.2f}%\n"
+            f"{indent}{'Usage Ratio:':25}{self.usage_ratio*100:>14.2f}%\n"
+            #f"{indent}{'Interest Rate:':25}{self.interest_rate*100:>14.2f}%\n" TODO: add this back in once rate can be calculated
             f"\n"
             f"{indent}{'Reserve Rate:':25}{self.reserve_rate*100:>14.2f}%\n"
             f"{indent}{'Max LTV:':25}{self.max_ltv*100:>14.2f}%\n"
@@ -352,12 +358,12 @@ class LendingPool:
         pass
 
     @property
-    def utilisation_rate(self):
+    def usage_ratio(self):
         if self.v_token.total_supply == 0 or self.a_token.total_supply==0:
-            utilisation_rate = 0
+            usage_ratio = 0
         else:
-            utilisation_rate = self.v_token.total_supply / self.a_token.total_supply
-        return(max(0, utilisation_rate))
+            usage_ratio = self.v_token.total_supply / self.a_token.total_supply
+        return(max(0, usage_ratio))
 
     def _transfer(self, wallet: Wallet, token: Token, amount: float, from_wallet: bool):
         # Helper function to handle transfers between Wallet and LendingPool in supply/withdraw/borrow/repay
@@ -416,42 +422,27 @@ def print_current_state():
     print(usdc_pool)
     print(wbtc_pool)
 
-# parameters - TODO: maybe keep dictionary with these parameters for each token so I can easily access them for testing
-max_ltv = 0.73
-liquidation_threshold = 0.78
-liquidation_bonus = 0.05
-closing_factor = 0.5
-
-
 defi_env = DefiEnv(prices={"usdc":1.0001, "wbtc":50000})
 
 usdc = Token(defi_env, "usdc")
 wbtc = Token(defi_env, "wbtc")
 
 usdc_pool = LendingPool(
-    env=defi_env, 
-    underlying_token=usdc, 
-    interest_rate=0.03, 
-    reserve_rate=0.2, 
-    max_ltv=max_ltv, 
-    liquidation_bonus=liquidation_bonus, 
-    liquidation_threshold=liquidation_threshold, 
-    closing_factor=closing_factor)
+    env = defi_env, 
+    underlying_token = usdc, 
+    **pool_parameters["usdc"]  # is it ok to do this?
+    )
 wbtc_pool = LendingPool(
-    env=defi_env, 
-    underlying_token=wbtc, 
-    interest_rate=0.003, 
-    reserve_rate=0.2, 
-    max_ltv=max_ltv, 
-    liquidation_bonus=liquidation_bonus, 
-    liquidation_threshold=liquidation_threshold, 
-    closing_factor=closing_factor)
+    env = defi_env, 
+    underlying_token = wbtc, 
+    **pool_parameters["wbtc"]
+    )
 
 # Create users
 Alice = Wallet(defi_env, "alice")
 Bob = Wallet(defi_env, "bob")
 
-# Provide initial wallet funds (100k USD for both)
+# Provide initial wallet funds (ca 100k USD for both)
 usdc.mint(Alice, 100_000)
 wbtc.mint(Bob, 2)
 
