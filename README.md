@@ -33,5 +33,5 @@ This will:
 - Use the lockfile (`uv.lock`) if present
 
 ## VSCode 
-Recommended extensions: Black, Todo Tree
+Recommended extensions: Black, Todo Tree, Ruff
 Run pytest: uv run python -m pytest (doing it without python -m leads to errors)
