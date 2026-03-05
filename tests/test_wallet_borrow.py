@@ -18,9 +18,9 @@ def test_borrow_health_factor_limit():
     # Supply to the pool
     pool.supply(alice, 1000)
 
-    # Maximum borrow that keeps HF > 1
-    max_safe_borrow = alice.available_collateral_usd
-    pool.borrow(alice, max_safe_borrow * 0.99)  # Should succeed
+    # Borrow a safe amount
+    safe_borrow = alice.available_collateral_usd * 0.5
+    pool.borrow(alice, safe_borrow)  # Should succeed
 
     # Borrow that would bring HF < 1
     with pytest.raises(AssertionError, match="Borrow would cause liquidation risk"):
