@@ -19,3 +19,19 @@ dependencies = [
     "web3>=7.13.0",
     "yfinance>=0.2.66",
 ]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]  # adjust to your Python version
+exclude = '''
+/(
+    \.venv
+  | build
+  | dist
+)/
+'''
+
+[dependency-groups]
+dev = [
+    "black>=26.1.0",
+]

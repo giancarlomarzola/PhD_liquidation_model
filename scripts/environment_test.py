@@ -13,21 +13,18 @@ def print_current_state():
     print(usdc_pool)
     print(wbtc_pool)
 
-defi_env = DefiEnv(prices={"usdc":1.0001, "wbtc":50000})
+
+defi_env = DefiEnv(prices={"usdc": 1.0001, "wbtc": 50000})
 
 usdc = Token(defi_env, "usdc")
 wbtc = Token(defi_env, "wbtc")
 
 usdc_pool = LendingPool(
-    env = defi_env, 
-    underlying_token = usdc, 
-    **pool_parameters["usdc"]  # is it ok to do this?
-    )
-wbtc_pool = LendingPool(
-    env = defi_env, 
-    underlying_token = wbtc, 
-    **pool_parameters["wbtc"]
-    )
+    env=defi_env,
+    underlying_token=usdc,
+    **pool_parameters["usdc"],  # is it ok to do this?
+)
+wbtc_pool = LendingPool(env=defi_env, underlying_token=wbtc, **pool_parameters["wbtc"])
 
 # Create users
 Alice = Wallet(defi_env, "alice")
@@ -37,22 +34,14 @@ Bob = Wallet(defi_env, "bob")
 usdc.mint(Alice, 100_000)
 wbtc.mint(Bob, 2)
 
-print(
-    f"{'='*50}\n"
-    "Initial state\n"
-    f"{'='*50}\n"
-    )
+print(f"{'='*50}\n" "Initial state\n" f"{'='*50}\n")
 print(Alice)
 print(Bob)
 print(usdc_pool)
 print(wbtc_pool)
 
 
-print(
-    f"{'='*50}\n"
-    "Supplies to each pool (100k USD for both)\n"
-    f"{'='*50}\n"
-    )
+print(f"{'='*50}\n" "Supplies to each pool (100k USD for both)\n" f"{'='*50}\n")
 usdc_pool.supply(Alice, 100_000)
 wbtc_pool.supply(Bob, 2)
 print(Alice)
@@ -61,11 +50,7 @@ print(usdc_pool)
 print(wbtc_pool)
 
 
-print(
-    f"{'='*50}\n"
-    "Borrows from each pool(25k USD for both)\n"
-    f"{'='*50}\n"
-    )
+print(f"{'='*50}\n" "Borrows from each pool(25k USD for both)\n" f"{'='*50}\n")
 usdc_pool.borrow(Bob, 25_000)
 wbtc_pool.borrow(Alice, 0.5)
 print(Alice)

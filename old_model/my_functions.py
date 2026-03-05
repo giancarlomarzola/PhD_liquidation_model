@@ -12,7 +12,7 @@ def create_token_df(aave_data_path, symbol, columns=None):
 
     # Handle columns argument
     if columns is None:
-        select_cols = None        # load all columns
+        select_cols = None  # load all columns
     else:
         if isinstance(columns, str):
             columns = [columns]
@@ -22,9 +22,8 @@ def create_token_df(aave_data_path, symbol, columns=None):
         select_cols = columns
 
     # Load + filter
-    df = (
-        pl.scan_parquet(str(aave_data_path/"reserves_part_*.parquet"))
-        .filter(pl.col("symbol") == symbol)
+    df = pl.scan_parquet(str(aave_data_path / "reserves_part_*.parquet")).filter(
+        pl.col("symbol") == symbol
     )
 
     # Optional select
@@ -36,6 +35,3 @@ def create_token_df(aave_data_path, symbol, columns=None):
     out.sort_values("blockNumber", inplace=True)
 
     return out
-
-
-
