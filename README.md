@@ -31,3 +31,7 @@ This will:
 - Create a virtual environment (if it does not already exist)
 - Install dependencies from `pyproject.toml`
 - Use the lockfile (`uv.lock`) if present
+
+## VSCode 
+Recommended extensions: Black, Todo Tree
+Run pytest: uv run python -m pytest (doing it without python -m leads to errors)

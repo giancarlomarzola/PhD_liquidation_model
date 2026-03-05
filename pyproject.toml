@@ -20,6 +20,12 @@ dependencies = [
     "web3>=7.13.0",
 ]
 
+[dependency-groups]
+dev = [
+    "black>=26.1.0",
+    "ruff>=0.15.4",
+]
+
 [tool.black]
 line-length = 88
 target-version = ["py313"]  # adjust to your Python version
@@ -30,8 +36,3 @@ exclude = '''
   | dist
 )/
 '''
-
-[dependency-groups]
-dev = [
-    "black>=26.1.0",
-]

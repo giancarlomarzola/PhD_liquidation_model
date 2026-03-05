@@ -3,8 +3,6 @@
     "editor.formatOnSaveMode": "file",
     "editor.formatOnPaste": false,
 
-    "python.linting.enabled": true,
-
     "python.testing.pytestArgs": ["tests"],
     "python.testing.unittestEnabled": false,
     "python.testing.nosetestsEnabled": false,
@@ -12,9 +10,11 @@
 
     "jupyter.notebookFileRoot": "${workspaceFolder}",
     "todo-tree.tree.scanMode": "workspace",
-    "cSpell.words": ["collateralized"],
 
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter"
-    }
+    },
+    "python.linting.enabled": true,
+    "python.linting.ruffEnabled": true,
+    "python.linting.ruffPath": "uv run ruff"
 }
