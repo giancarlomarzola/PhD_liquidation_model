@@ -1,7 +1,5 @@
 # Pool parameters:
 
-# Better as individual dicts, or nested dict so i have one main pool_parameters dict with each value being the dict for the key's token?
-
 pool_parameters = {
     "usdc": {
         "max_ltv": 0.75,
