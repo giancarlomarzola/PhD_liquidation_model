@@ -322,7 +322,7 @@ class LendingPool:
         self.env.lending_pools[underlying_token.symbol] = self
         # Initialise tokens
         self.underlying_token = underlying_token
-        self.available_liquidity = 0.0
+        self.available_liquidity_cash = 0.0
         a_symbol = f"a_{underlying_token.symbol}"
         v_symbol = f"v_{underlying_token.symbol}"
         assert a_symbol not in env.tokens, f"Token {a_symbol} already exists"
@@ -348,7 +348,7 @@ class LendingPool:
             f"{'-'*50}\n"
             f"{indent}{'aToken Supply:':25}{self.a_token.total_supply:>15,.2f}\n"
             f"{indent}{'vToken Supply:':25}{self.v_token.total_supply:>15,.2f}\n"
-            f"{indent}{'Underlying Supply':25}{self.available_liquidity:>15,.2f}\n"
+            f"{indent}{'Underlying Supply':25}{self.available_liquidity_cash:>15,.2f}\n"
             f"{indent}{'Usage Ratio:':25}{self.usage_ratio*100:>14.2f}%\n"
             # f"{indent}{'Interest Rate:':25}{self.interest_rate*100:>14.2f}%\n" TODO: add this back in once rate can be calculated
             f"\n"
@@ -362,31 +362,33 @@ class LendingPool:
     @property
     def bad_debt(self):  # TODO: bad_debt property
         pass
-
+    
     @property
     def usage_ratio(self):
-        if self.v_token.total_supply == 0 or self.a_token.total_supply == 0:
-            usage_ratio = 0
-        else:
-            usage_ratio = self.v_token.total_supply / self.a_token.total_supply
-        return max(0, usage_ratio)
+        total_debt = self.v_token.total_supply
+        total_liquidity = self.available_liquidity + total_debt
+
+        if total_liquidity == 0:
+            return 0
+
+        return total_debt / total_liquidity
 
     def _transfer(self, wallet: Wallet, token: Token, amount: float, from_wallet: bool):
         # Helper function to handle transfers between Wallet and LendingPool in supply/withdraw/borrow/repay
         assert amount > 0, "Amount must be positive"
-        pool_balance = self.available_liquidity
+        pool_balance = self.available_liquidity_cash
         wallet_balance = wallet.balances.get(token, 0.0)
         if from_wallet is True:  # Wallet to Pool transaction
             assert (
                 wallet_balance >= amount
             ), f"Wallet '{wallet.name}' does not have enough {token.symbol}"
             wallet.balances[token] = wallet_balance - amount
-            self.available_liquidity = pool_balance + amount
+            self.available_liquidity_cash = pool_balance + amount
         else:  # Pool to Wallet transaction
             assert (
                 pool_balance >= amount
             ), f"{self.underlying_token.symbol} Pool does not have enough {token.symbol}"
-            self.available_liquidity = pool_balance - amount
+            self.available_liquidity_cash = pool_balance - amount
             wallet.balances[token] = wallet_balance + amount
 
     # TODO: Add interest rates to supply/withdraw/borrow/repay, including any additional needed checks and reserve_factor consequences
@@ -422,6 +424,9 @@ class LendingPool:
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
 
     # TODO: Calculate interest rates from strategy
+    def calculate_interest_rates(self):
+        
+        pass
 
     # TODO: Accrue interest - mint a_tokens and v_tokens?
 
