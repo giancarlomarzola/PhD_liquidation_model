@@ -233,10 +233,24 @@ class Wallet:
 
         return (total_collateral * weighted_avg_liq_threshold) / total_borrowed
 
-    # TODO: get_liquidation_candidates
+    # Helper functions for supply, withdraw, borrow, repay
+    #   To trigger transcations using Wallet.transaction(pool, amount) instead of LendingPool.transaction(Wallet, amount)
+    def supply(self, pool: LendingPool, amount: float):
+        pool.supply(self, amount)
 
-    # TODO: request_liquidation
-    # Liquidation should add any bad debt that occurs to lending_pool.bad_debt
+    def withdraw(self, pool: LendingPool, amount: float):
+        pool.withdraw(self, amount)
+
+    def borrow(self, pool: LendingPool, amount: float):
+        pool.borrow(self, amount)
+
+    def repay(self, pool: LendingPool, amount: float):
+        pool.repay(self, amount)
+
+    # TODO: Wallet - get_liquidation_candidates
+
+    # TODO: Wallet - request_liquidation helper function
+    #   To trigger liquidation using Wallet.liquidate instead of LendingPool.liquidate
 
 
 class Token:
@@ -305,16 +319,16 @@ class LendingPool:
         interest_slope_2: float,  # slope of interest rate after optimal usage ratio
         interest_base_rate: float,  # minimum interest rate amount, slope amounts are added to this
         optimal_usage_ratio: float,  # kink-point of interest rate curve
-        reserve_rate: float,  # proportion of borrow interest that is sent to treasury, instead of paid out to suppliers
-        max_ltv: float,  # how much of supply can be used as collateral
+        reserve_rate: float,  # proportion of borrow interest that is sent to treasury upon repayment, instead of paid out to suppliers
+        max_ltv: float,  # proportion of a user's supplied amount that can be used as collateral
         liquidation_bonus: float,  # reward for liquidator (aka liquidation_penalty)
-        liquidation_threshold: float,  # threshold at which liquidation can be initialised
+        liquidation_threshold: float,  # threshold at which liquidation can be initialised, reflected in health factor
         closing_factor: float,  # maximum % of position that can be liquidated in one transaction
         # a_token and v_token: automatically created by pool
-        # available_liquidity: initialised as 0, this way if it starts with a balance it has to be transferred in or minted to this
-        # bad_debt: initialised as 0
-        # treasury: initialised as 0
-        # TODO: Should i add borrowCap, supplyCap?
+        # available_liquidity: initialised as 0, to start with different amount it has to be transferred in or minted
+        # bad_debt: initialised as 0 (same as above)
+        # treasury: initialised as 0 (same as above)
+        # TODO: add borrowCap, supplyCap to LendingPool?
     ):
         # Add Lending Pool to defi environment
         assert (
@@ -340,10 +354,10 @@ class LendingPool:
         self.liquidation_bonus = liquidation_bonus
         self.liquidation_threshold = liquidation_threshold
         self.closing_factor = closing_factor
-        # Initialise balances
-        self.available_liquidity_cash = 0.0  # TODO: is this ok, or should i set default to 0 but allow other amount? If so do i make it that other amounts are correctly minted to the pool?
-        self.bad_debt = 0.0
-        self.treasury = 0.0
+        # Initialise balances at 0
+        self.available_liquidity_cash: float = 0
+        self.bad_debt: float = 0
+        self.treasury: float = 0
 
     def __str__(self) -> str:
         indent = "    "  # 4 spaces
@@ -353,7 +367,7 @@ class LendingPool:
             f"{'-'*50}\n"
             f"{indent}{'aToken Supply:':25}{self.a_token.total_supply:>15,.2f}\n"
             f"{indent}{'vToken Supply:':25}{self.v_token.total_supply:>15,.2f}\n"
-            f"{indent}{'Underlying Supply':25}{self.available_liquidity_cash:>15,.2f}\n"
+            f"{indent}{'Available Liquidity (Cash)':25}{self.available_liquidity_cash:>15,.2f}\n"
             f"{indent}{'Usage Ratio:':25}{self.usage_ratio*100:>14.2f}%\n"
             # f"{indent}{'Interest Rate:':25}{self.interest_rate*100:>14.2f}%\n" TODO: add this back in once rate can be calculated
             f"\n"
@@ -363,6 +377,8 @@ class LendingPool:
             f"{indent}{'Liquidation Threshold:':25}{self.liquidation_threshold*100:>14.2f}%\n"
             f"{indent}{'Closing Factor:':25}{self.closing_factor*100:>14.2f}%\n"
         )
+
+    # TODO: Add separate functions to print only balances or parameters?
 
     @property
     def usage_ratio(self):
@@ -423,13 +439,18 @@ class LendingPool:
         ), f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction"
         self.v_token.burn(wallet, amount)
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
-        # TODO: Should this step also pay some amount to treasury?
+        # TODO: Payment to treasury at this step?
 
-    # TODO: Calculate interest rates from strategy
+    # TODO: LendingPool - Calculate interest rates
     def calculate_interest_rates(self):
         pass
 
-    # TODO: Accrue interest - mint a_tokens and v_tokens?
+    # TODO: LendingPool - Accrue interest
+    #   simply mint a_tokens and v_tokens?
+
+    # TODO: LendingPool - liquidate
+    #   carry out checks and execute liquidation
+    #   Liquidation should add any bad debt that occurs to lending_pool.bad_debt
 
 
 # ========================================================================================================================
@@ -468,7 +489,7 @@ if __name__ == "__main__":
     print_current_state()
 
     print(
-        3*"\n"
+        3 * "\n"
         + f"{'='*50}\n"
         + "Supplies to each pool (100k USD for both)\n"
         + f"{'='*50}\n"
@@ -478,7 +499,7 @@ if __name__ == "__main__":
     print_current_state()
 
     print(
-        3*"\n"
+        3 * "\n"
         + f"{'='*50}\n"
         + "Borrows from each pool(25k USD for both)\n"
         + f"{'='*50}\n"
@@ -488,7 +509,7 @@ if __name__ == "__main__":
     print_current_state()
 
     print(
-        3*"\n"
+        3 * "\n"
         + f"{'='*50}\n"
         + "Repay the full borrowed amount from each pool\n"
         + f"{'='*50}\n"
@@ -498,7 +519,7 @@ if __name__ == "__main__":
     print_current_state()
 
     print(
-        3*"\n"
+        3 * "\n"
         + f"{'='*50}\n"
         + "Withdraw full amount of supplies from each pool\n"
         + f"{'='*50}\n"
