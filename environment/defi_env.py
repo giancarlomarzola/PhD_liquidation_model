@@ -236,6 +236,7 @@ class Wallet:
     # TODO: get_liquidation_candidates
 
     # TODO: request_liquidation
+    # Liquidation should add any bad debt that occurs to lending_pool.bad_debt
 
 
 class Token:
@@ -302,16 +303,17 @@ class LendingPool:
         underlying_token: Token,
         interest_slope_1: float,  # slope of interest rate before optimal usage ratio
         interest_slope_2: float,  # slope of interest rate after optimal usage ratio
-        interest_base_rate: float,  # interest when util_rate == 0
+        interest_base_rate: float,  # minimum interest rate amount, slope amounts are added to this
         optimal_usage_ratio: float,  # kink-point of interest rate curve
-        reserve_rate: float,  # proportion of interest that is sent to treasury
+        reserve_rate: float,  # proportion of borrow interest that is sent to treasury, instead of paid out to suppliers
         max_ltv: float,  # how much of supply can be used as collateral
         liquidation_bonus: float,  # reward for liquidator (aka liquidation_penalty)
         liquidation_threshold: float,  # threshold at which liquidation can be initialised
         closing_factor: float,  # maximum % of position that can be liquidated in one transaction
         # a_token and v_token: automatically created by pool
         # available_liquidity: initialised as 0, this way if it starts with a balance it has to be transferred in or minted to this
-        # TODO: What happens to reserve_rate funds? Do i keep a general treasury? Per pool treasury?
+        # bad_debt: initialised as 0
+        # treasury: initialised as 0
         # TODO: Should i add borrowCap, supplyCap?
     ):
         # Add Lending Pool to defi environment
@@ -322,7 +324,6 @@ class LendingPool:
         self.env.lending_pools[underlying_token.symbol] = self
         # Initialise tokens
         self.underlying_token = underlying_token
-        self.available_liquidity_cash = 0.0
         a_symbol = f"a_{underlying_token.symbol}"
         v_symbol = f"v_{underlying_token.symbol}"
         assert a_symbol not in env.tokens, f"Token {a_symbol} already exists"
@@ -339,6 +340,10 @@ class LendingPool:
         self.liquidation_bonus = liquidation_bonus
         self.liquidation_threshold = liquidation_threshold
         self.closing_factor = closing_factor
+        # Initialise balances
+        self.available_liquidity_cash = 0.0  # TODO: is this ok, or should i set default to 0 but allow other amount? If so do i make it that other amounts are correctly minted to the pool?
+        self.bad_debt = 0.0
+        self.treasury = 0.0
 
     def __str__(self) -> str:
         indent = "    "  # 4 spaces
@@ -360,13 +365,9 @@ class LendingPool:
         )
 
     @property
-    def bad_debt(self):  # TODO: bad_debt property
-        pass
-    
-    @property
     def usage_ratio(self):
         total_debt = self.v_token.total_supply
-        total_liquidity = self.available_liquidity + total_debt
+        total_liquidity = self.available_liquidity_cash + total_debt
 
         if total_liquidity == 0:
             return 0
@@ -422,10 +423,10 @@ class LendingPool:
         ), f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction"
         self.v_token.burn(wallet, amount)
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
+        # TODO: Should this step also pay some amount to treasury?
 
     # TODO: Calculate interest rates from strategy
     def calculate_interest_rates(self):
-        
         pass
 
     # TODO: Accrue interest - mint a_tokens and v_tokens?
@@ -443,15 +444,13 @@ if __name__ == "__main__":
         print(usdc_pool)
         print(wbtc_pool)
 
-    defi_env = DefiEnv(prices={"usdc": 1.0001, "wbtc": 50000})
+    defi_env = DefiEnv(prices={"usdc": 1.00, "wbtc": 50000.00})
 
     usdc = Token(defi_env, "usdc")
     wbtc = Token(defi_env, "wbtc")
 
     usdc_pool = LendingPool(
-        env=defi_env,
-        underlying_token=usdc,
-        **pool_parameters["usdc"],  # TODO: Check if this is ok?
+        env=defi_env, underlying_token=usdc, **pool_parameters["usdc"]
     )
     wbtc_pool = LendingPool(
         env=defi_env, underlying_token=wbtc, **pool_parameters["wbtc"]
@@ -461,55 +460,49 @@ if __name__ == "__main__":
     Alice = Wallet(defi_env, "alice")
     Bob = Wallet(defi_env, "bob")
 
-    # Provide initial wallet funds (ca 100k USD for both)
+    # Provide initial wallet funds (100k USD for both)
     usdc.mint(Alice, 100_000)
     wbtc.mint(Bob, 2)
 
-    print(f"{'='*50}\n" "Initial state\n" f"{'='*50}\n")
-    print(Alice)
-    print(Bob)
-    print(usdc_pool)
-    print(wbtc_pool)
+    print(f"{'='*50}\n" + "Initial state\n" + f"{'='*50}\n")
+    print_current_state()
 
-    print(f"{'='*50}\n" "Supplies to each pool (100k USD for both)\n" f"{'='*50}\n")
+    print(
+        3*"\n"
+        + f"{'='*50}\n"
+        + "Supplies to each pool (100k USD for both)\n"
+        + f"{'='*50}\n"
+    )
     usdc_pool.supply(Alice, 100_000)
     wbtc_pool.supply(Bob, 2)
-    print(Alice)
-    print(Bob)
-    print(usdc_pool)
-    print(wbtc_pool)
+    print_current_state()
 
-    print(f"{'='*50}\n" "Borrows from each pool(25k USD for both)\n" f"{'='*50}\n")
+    print(
+        3*"\n"
+        + f"{'='*50}\n"
+        + "Borrows from each pool(25k USD for both)\n"
+        + f"{'='*50}\n"
+    )
     usdc_pool.borrow(Bob, 25_000)
     wbtc_pool.borrow(Alice, 0.5)
-    print(Alice)
-    print(Bob)
-    print(usdc_pool)
-    print(wbtc_pool)
+    print_current_state()
 
-    """
     print(
-        f"{'='*50}\n"
-        "Repay the full borrowed amount from each pool\n"
-        f"{'='*50}\n"
-        )
+        3*"\n"
+        + f"{'='*50}\n"
+        + "Repay the full borrowed amount from each pool\n"
+        + f"{'='*50}\n"
+    )
     usdc_pool.repay(Bob, Bob.balances.get(usdc_pool.v_token))
     wbtc_pool.repay(Alice, Alice.balances.get(wbtc_pool.v_token))
-    print(Alice)
-    print(Bob)
-    print(usdc_pool)
-    print(wbtc_pool)
-
+    print_current_state()
 
     print(
-        f"{'='*50}\n"
-        "Withdraw full amount of supplies from each pool\n"
-        f"{'='*50}\n"
-        )
+        3*"\n"
+        + f"{'='*50}\n"
+        + "Withdraw full amount of supplies from each pool\n"
+        + f"{'='*50}\n"
+    )
     usdc_pool.withdraw(Alice, Alice.balances.get(usdc_pool.a_token))
     wbtc_pool.withdraw(Bob, Bob.balances.get(wbtc_pool.a_token))
-    print(Alice)
-    print(Bob)
-    print(usdc_pool)
-    print(wbtc_pool)
-    """
+    print_current_state()
