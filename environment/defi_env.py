@@ -68,7 +68,6 @@ class DefiEnv:
         self.prices = prices
         self.wallets = wallets
         self.lending_pools = lending_pools
-        self.prices = prices
 
     # Properties: state_summary, prices,
     # Methods: update_prices, act_update_react
@@ -100,8 +99,6 @@ class Wallet:
         self.balances = balances or {}
         self.name = name
         self.is_liquidator = is_liquidator
-
-    # Methods: initialise_transaction (as a way to use LendingPool supply/withdraw/borrow/repay from Wallet?), get_liquidation_candidates
 
     def __str__(self) -> str:
         indent = "    "
@@ -189,6 +186,10 @@ class Wallet:
         collateral_change: dict[Token, float] | None = None,
         debt_change: dict[Token, float] | None = None,
     ) -> float:
+        """
+        Calculates the health factor after a given transaction, without executing the transaction.
+        Used to determine if the transaction can safely be carried out.
+        """
 
         collateral_change = collateral_change or {}
         debt_change = debt_change or {}
@@ -233,8 +234,7 @@ class Wallet:
 
         return (total_collateral * weighted_avg_liq_threshold) / total_borrowed
 
-    # Helper functions for supply, withdraw, borrow, repay
-    #   To trigger transcations using Wallet.transaction(pool, amount) instead of LendingPool.transaction(Wallet, amount)
+    # Helper functions to trigger supply, withdraw, borrow, repay from Wallet instead of LendingPool
     def supply(self, pool: LendingPool, amount: float):
         pool.supply(self, amount)
 
@@ -248,9 +248,12 @@ class Wallet:
         pool.repay(self, amount)
 
     # TODO: Wallet - get_liquidation_candidates
+    #       Should i instead maintain a global list that liquidators can read, for efficiency (e.g. in DefiEnv)?
+    #       Or scan only for tokens the liquidator is able to use for repayment?
 
-    # TODO: Wallet - request_liquidation helper function
-    #   To trigger liquidation using Wallet.liquidate instead of LendingPool.liquidate
+    # Helper function to trigger liquidation from liquidator's Wallet instead of LendingPool
+    def liquidate(self, pool: LendingPool, borrower: Wallet, amount: float):
+        pool.liquidate(self, borrower, amount)
 
 
 class Token:
@@ -325,10 +328,10 @@ class LendingPool:
         liquidation_threshold: float,  # threshold at which liquidation can be initialised, reflected in health factor
         closing_factor: float,  # maximum % of position that can be liquidated in one transaction
         # a_token and v_token: automatically created by pool
-        # available_liquidity: initialised as 0, to start with different amount it has to be transferred in or minted
+        # available_liquidity_cash: initialised as 0, to start with different amount it has to be transferred in or minted
         # bad_debt: initialised as 0 (same as above)
         # treasury: initialised as 0 (same as above)
-        # TODO: add borrowCap, supplyCap to LendingPool?
+        # TODO: LendingPool - add borrowCap, supplyCap?
     ):
         # Add Lending Pool to defi environment
         assert (
@@ -378,7 +381,7 @@ class LendingPool:
             f"{indent}{'Closing Factor:':25}{self.closing_factor*100:>14.2f}%\n"
         )
 
-    # TODO: Add separate functions to print only balances or parameters?
+    # TODO: LendingPool - Alternative __str__ functions to print only balances or parameters?
 
     @property
     def usage_ratio(self):
@@ -408,7 +411,8 @@ class LendingPool:
             self.available_liquidity_cash = pool_balance - amount
             wallet.balances[token] = wallet_balance + amount
 
-    # TODO: Add interest rates to supply/withdraw/borrow/repay, including any additional needed checks and reserve_factor consequences
+    # TODO: LendingPool - Add interest rates to supply/withdraw/borrow/repay
+    #       including any additional needed checks and reserve_factor consequences
 
     def supply(self, wallet: Wallet, amount: float):
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
@@ -439,7 +443,7 @@ class LendingPool:
         ), f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction"
         self.v_token.burn(wallet, amount)
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
-        # TODO: Payment to treasury at this step?
+        # TODO: LendingPool - Payment of reserve_factor to treasury here?
 
     # TODO: LendingPool - Calculate interest rates
     def calculate_interest_rates(self):
@@ -449,8 +453,14 @@ class LendingPool:
     #   simply mint a_tokens and v_tokens?
 
     # TODO: LendingPool - liquidate
-    #   carry out checks and execute liquidation
-    #   Liquidation should add any bad debt that occurs to lending_pool.bad_debt
+    def liquidate(self, liquidator: Wallet, borrower: Wallet, repay_amount: float):
+        # Check borrower health factor
+        # Check repay amount does not exceed amount allowed by closing factor
+        # Check liquidator has sufficient funds for repay
+        # Check pool has available cash to pay out borrower's collateral to liquidator
+        # Execute liquidation transactions
+        # Account any resulting bad debt to the pool
+        pass
 
 
 # ========================================================================================================================
@@ -494,7 +504,7 @@ if __name__ == "__main__":
         + "Supplies to each pool (100k USD for both)\n"
         + f"{'='*50}\n"
     )
-    usdc_pool.supply(Alice, 100_000)
+    usdc_pool.supply(Alice, 100_000)  # alternatively: Alice.supply(usdc_pool, 100_000)
     wbtc_pool.supply(Bob, 2)
     print_current_state()
 
