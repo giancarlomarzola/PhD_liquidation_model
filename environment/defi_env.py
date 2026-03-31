@@ -492,7 +492,7 @@ class LendingPool:
     def supply_rate(self) -> float:
         return self.calculate_interest_rates()[1]
 
-    # TODO: Review claude code suggestions (entire accrue_interest function)
+    # TODO: Review entire accrue_interest function to ensure it works as intended
     def accrue_interest(self, blocks_elapsed: int):
         """
         Accrues interest for all positions over the given number of blocks.
@@ -529,7 +529,7 @@ class LendingPool:
         supply_interest = total_supply_before * supply_factor
         self.treasury += borrow_interest - supply_interest
 
-    # TODO: Review claude code suggestion (entire liquidate function)
+    # TODO: Review entire liquidate function to ensure it works as intended
     def liquidate(
         self,
         liquidator: Wallet,
