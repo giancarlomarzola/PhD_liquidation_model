@@ -627,9 +627,13 @@ class LendingPool:
 if __name__ == "__main__":
 
     def print_current_state():
+        print("")
         print(Alice)
+        print("")
         print(Bob)
+        print("")
         print(usdc_pool)
+        print("")
         print(wbtc_pool)
 
     defi_env = DefiEnv(prices={"usdc": 1.00, "wbtc": 50_000.00})
