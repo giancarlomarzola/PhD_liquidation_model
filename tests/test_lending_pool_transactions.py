@@ -29,16 +29,27 @@ def test_borrow_health_factor_limit():
 # TODO: Think about what tests need to be done w.r.t. supply, withdraw, borrow, repay
 
     # Supply with insufficient wallet funds
-    # Supply beyond supply cap
+    # Supply exactly at and beyond supply cap
+    # Supply with zero amount and negative amount
+    # Supply to pool that is not present in wallet token dict
 
     # Withdraw more than was supplied
     # Withdraw with insufficient pool liquidity
+    # Withdraw exactly full supplied amount
+    # Withdraw when user has no outstanding debt (HF is technically infinite — does your code handle division-by-zero?)
     # Withdraw such that HF<1
+    # Withdraw with zero amount and negative amount
+    # Withdraw from pool that is not present in wallet token dict
 
     # Borrow with insufficient collateral
     # Borrow with insufficient pool liquidity
-    # Borrow beyond borrow cap
+    # Borrow exactly at and beyond borrow cap
     # Borrow such that HF<1
+    # Borrow with zero amount and negative amount
+    # Borrow from pool that is not present in wallet token dict
 
     # Repay more than was borrowed
+    # Repay exactly full borrowed amount
     # Repay with insufficient wallet funds
+    # Repay with zero amount and negative amount
+    # Repay to pool that is not present in wallet token dict
