@@ -393,8 +393,8 @@ class LendingPool:
             f"{indent}{'Supply Rate:':25}{self.supply_rate*100:>14.2f}%\n"
             f"\n"
             f"{indent}{'Reserve Rate:':25}{self.reserve_rate*100:>14.2f}%\n"
-            f"{indent}{'Supply Cap:':25}{self.supply_cap:>14.2f}%\n"
-            f"{indent}{'Borrow Cap:':25}{self.borrow_cap:>14.2f}%\n"
+            f"{indent}{'Supply Cap:':25}{f'{self.supply_cap:,.2f}' if self.supply_cap is not None else 'None':>14}\n"
+            f"{indent}{'Borrow Cap:':25}{f'{self.borrow_cap:,.2f}' if self.borrow_cap is not None else 'None':>14}\n"
             f"{indent}{'Max LTV:':25}{self.max_ltv*100:>14.2f}%\n"
             f"{indent}{'Liquidation Bonus:':25}{self.liquidation_bonus*100:>14.2f}%\n"
             f"{indent}{'Liquidation Threshold:':25}{self.liquidation_threshold*100:>14.2f}%\n"
@@ -601,19 +601,12 @@ class LendingPool:
         )
 
         # Execute liquidation: liquidator repays borrower's debt
-        self._transfer(
-            liquidator, self.underlying_token, repay_amount, from_wallet=True
-        )
+        self._transfer_from_pool(liquidator, repay_amount)
         self.v_token.burn(borrower, repay_amount)
 
         # Execute liquidation: burn borrower's aTokens, send underlying to liquidator
         collateral_pool.a_token.burn(borrower, actual_collateral_seized)
-        collateral_pool._transfer(
-            liquidator,
-            collateral_pool.underlying_token,
-            actual_collateral_seized,
-            from_wallet=False,
-        )
+        collateral_pool._transfer_from_pool(liquidator, actual_collateral_seized)
 
         # Account any resulting bad debt (collateral insufficient to cover full bonus)
         if actual_collateral_seized < collateral_to_seize:
