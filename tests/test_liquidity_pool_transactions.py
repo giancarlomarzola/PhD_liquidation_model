@@ -2,9 +2,6 @@ import pytest
 from environment.defi_env import DefiEnv, Token, LendingPool, Wallet
 from environment.parameters import pool_parameters
 
-# To run tests: python -m pytest -v
-
-
 # ============================================================
 # Fixtures
 # ============================================================

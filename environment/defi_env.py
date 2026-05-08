@@ -5,6 +5,7 @@ from environment.parameters import pool_parameters
 # Creating the users so that overall there is a given LTV distribution, for given token pairs
 # Discretionary activity rate
 # Token price series generation
+# Liquidation collateral pool choice (part of agent strategies)
 # Figuring out what parameters to use for simulation
 
 
@@ -258,8 +259,6 @@ class Wallet:
         ]
 
     # Helper function to trigger liquidation from liquidator's Wallet instead of LendingPool
-    # TODO: Implement strategies to choose collateral_pool (i.e. which token to seize)
-    #       e.g. prioritise stable coins, prioritise tokens already in wallet, select highest USD value token...)?
     def liquidate(
         self,
         pool: LendingPool,
@@ -401,8 +400,6 @@ class LendingPool:
             f"{indent}{'Closing Factor:':25}{self.closing_factor*100:>14.2f}%\n"
         )
 
-    # TODO: LendingPool - Alternative __str__ functions to print only balances or parameters?
-
     @property
     def usage_ratio(self):
         total_debt = self.v_token.total_supply
@@ -508,14 +505,16 @@ class LendingPool:
         return self.calculate_interest_rates()[1]
 
     # TODO: Review entire accrue_interest function to ensure it works as intended
+    # TODO: Change interest method 
+        # instead of minting to wallets, change exchange rate and realise when exchanging yield-bearing tokens for underlying
     def accrue_interest(self, blocks_elapsed: int):
         """
         Accrues interest for all positions over the given number of blocks.
         Mints additional vTokens to borrowers and aTokens to suppliers.
         Treasury receives the reserve_rate portion of borrow interest.
         """
-        if blocks_elapsed <= 0 or self.v_token.total_supply == 0:
-            return
+        if blocks_elapsed <= 0:
+            return 
 
         borrow_rate, supply_rate = self.calculate_interest_rates()
         blocks_per_year = self.env.blocks_per_year
