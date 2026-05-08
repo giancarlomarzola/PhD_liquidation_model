@@ -27,3 +27,18 @@ def test_borrow_health_factor_limit():
 
 
 # TODO: Think about what tests need to be done w.r.t. supply, withdraw, borrow, repay
+
+    # Supply with insufficient wallet funds
+    # Supply beyond supply cap
+
+    # Withdraw more than was supplied
+    # Withdraw with insufficient pool liquidity
+    # Withdraw such that HF<1
+
+    # Borrow with insufficient collateral
+    # Borrow with insufficient pool liquidity
+    # Borrow beyond borrow cap
+    # Borrow such that HF<1
+
+    # Repay more than was borrowed
+    # Repay with insufficient wallet funds

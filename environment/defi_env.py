@@ -341,11 +341,12 @@ class LendingPool:
         liquidation_bonus: float,  # reward for liquidator (aka liquidation_penalty)
         liquidation_threshold: float,  # threshold at which liquidation can be initialised, reflected in health factor
         closing_factor: float,  # maximum % of position that can be liquidated in one transaction
+        supply_cap: float | None = None,
+        borrow_cap: float | None = None,
         # a_token and v_token: automatically created by pool
         # available_liquidity_cash: initialised as 0, to start with different amount it has to be transferred in or minted
         # bad_debt: initialised as 0 (same as above)
         # treasury: initialised as 0 (same as above)
-        # TODO: LendingPool - add borrowCap, supplyCap?
     ):
         # Add Lending Pool to defi environment
         assert (
@@ -375,6 +376,8 @@ class LendingPool:
         self.available_liquidity_cash: float = 0
         self.bad_debt: float = 0
         self.treasury: float = 0
+        self.supply_cap = supply_cap
+        self.borrow_cap = borrow_cap
 
     def __str__(self) -> str:
         indent = "    "  # 4 spaces
@@ -390,6 +393,8 @@ class LendingPool:
             f"{indent}{'Supply Rate:':25}{self.supply_rate*100:>14.2f}%\n"
             f"\n"
             f"{indent}{'Reserve Rate:':25}{self.reserve_rate*100:>14.2f}%\n"
+            f"{indent}{'Supply Cap:':25}{self.supply_cap:>14.2f}%\n"
+            f"{indent}{'Borrow Cap:':25}{self.borrow_cap:>14.2f}%\n"
             f"{indent}{'Max LTV:':25}{self.max_ltv*100:>14.2f}%\n"
             f"{indent}{'Liquidation Bonus:':25}{self.liquidation_bonus*100:>14.2f}%\n"
             f"{indent}{'Liquidation Threshold:':25}{self.liquidation_threshold*100:>14.2f}%\n"
@@ -414,13 +419,13 @@ class LendingPool:
         pool_balance = self.available_liquidity_cash
         wallet_balance = wallet.balances.get(token, 0.0)
         if from_wallet is True:  # Wallet to Pool transaction
-            assert (
+            assert( # Check wallet has sufficient underlying
                 wallet_balance >= amount
             ), f"Wallet '{wallet.name}' does not have enough {token.symbol}"
             wallet.balances[token] = wallet_balance - amount
             self.available_liquidity_cash = pool_balance + amount
         else:  # Pool to Wallet transaction
-            assert (
+            assert( # Check pool has sufficient liquidity
                 pool_balance >= amount
             ), f"{self.underlying_token.symbol} Pool does not have enough {token.symbol}"
             self.available_liquidity_cash = pool_balance - amount
@@ -430,30 +435,38 @@ class LendingPool:
     #       including any additional needed checks and reserve_factor consequences
 
     def supply(self, wallet: Wallet, amount: float):
+        if self.supply_cap:
+            assert( # Check supply cap
+                (self.a_token.total_supply + amount) <= self.supply_cap
+            ), "Transaction exceeds pool's supply cap"
         self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
         self.a_token.mint(wallet, amount)
 
     def withdraw(self, wallet: Wallet, amount: float):
         hf_after = wallet.health_factor_after(collateral_change={self.a_token: -amount})
-        assert (
+        assert ( # Check HF
             hf_after > 1
         ), f"Withdraw would cause liquidation risk -- Health factor after transaction = {hf_after}"
-        assert (
+        assert ( # Check that user ins't withdrawing more than they supplied
             wallet.balances.get(self.a_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.a_token.symbol} for transaction"
         self.a_token.burn(wallet, amount)
         self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
 
     def borrow(self, wallet: Wallet, amount: float):
+        if self.borrow_cap:
+            assert( # Check borrow cap
+                (self.v_token.total_supply + amount) <= self.borrow_cap
+            ), "Transaction exceeds pool's borrow cap"
         hf_after = wallet.health_factor_after(debt_change={self.v_token: amount})
-        assert (
+        assert ( # Check HF
             hf_after > 1
         ), f"Borrow would cause liquidation risk -- Health factor after transaction = {hf_after}"
         self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
         self.v_token.mint(wallet, amount)
 
     def repay(self, wallet: Wallet, amount: float):
-        assert (
+        assert ( # Check that user isn't repaying more than they borrowed
             wallet.balances.get(self.v_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction"
         self.v_token.burn(wallet, amount)
