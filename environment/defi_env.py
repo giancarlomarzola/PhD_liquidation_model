@@ -413,23 +413,19 @@ class LendingPool:
 
         return total_debt / total_liquidity
 
-    def _transfer(self, wallet: Wallet, token: Token, amount: float, from_wallet: bool):
-        # Helper function to handle transfers between Wallet and LendingPool in supply/withdraw/borrow/repay
+    def _transfer_from_wallet(self, wallet: Wallet, amount: float):
+        # Helper function to handle transfers from Wallet to LendingPool
         assert amount > 0, "Amount must be positive"
-        pool_balance = self.available_liquidity_cash
-        wallet_balance = wallet.balances.get(token, 0.0)
-        if from_wallet is True:  # Wallet to Pool transaction
-            assert( # Check wallet has sufficient underlying
-                wallet_balance >= amount
-            ), f"Wallet '{wallet.name}' does not have enough {token.symbol}"
-            wallet.balances[token] = wallet_balance - amount
-            self.available_liquidity_cash = pool_balance + amount
-        else:  # Pool to Wallet transaction
-            assert( # Check pool has sufficient liquidity
-                pool_balance >= amount
-            ), f"{self.underlying_token.symbol} Pool does not have enough {token.symbol}"
-            self.available_liquidity_cash = pool_balance - amount
-            wallet.balances[token] = wallet_balance + amount
+        wallet_balance = wallet.balances.get(self.underlying_token, 0.0)
+        assert wallet_balance >= amount, f"Wallet '{wallet.name}' does not have enough {self.underlying_token.symbol}"
+        wallet.balances[self.underlying_token] = wallet_balance - amount
+        self.available_liquidity_cash += amount
+
+    def _transfer_from_pool(self, wallet: Wallet, amount: float):
+        assert amount > 0, "Amount must be positive"
+        assert self.available_liquidity_cash >= amount, f"{self.underlying_token.symbol} pool does not have enough liquidity"
+        self.available_liquidity_cash -= amount
+        wallet.balances[self.underlying_token] = wallet.balances.get(self.underlying_token, 0.0) + amount
 
     # TODO: LendingPool - Add interest rates to supply/withdraw/borrow/repay
     #       including any additional needed checks and reserve_factor consequences
@@ -439,7 +435,7 @@ class LendingPool:
             assert( # Check supply cap
                 (self.a_token.total_supply + amount) <= self.supply_cap
             ), "Transaction exceeds pool's supply cap"
-        self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
+        self._transfer_from_wallet(wallet, amount)
         self.a_token.mint(wallet, amount)
 
     def withdraw(self, wallet: Wallet, amount: float):
@@ -451,7 +447,7 @@ class LendingPool:
             wallet.balances.get(self.a_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.a_token.symbol} for transaction"
         self.a_token.burn(wallet, amount)
-        self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
+        self._transfer_from_pool(wallet, amount)
 
     def borrow(self, wallet: Wallet, amount: float):
         if self.borrow_cap:
@@ -462,7 +458,7 @@ class LendingPool:
         assert ( # Check HF
             hf_after > 1
         ), f"Borrow would cause liquidation risk -- Health factor after transaction = {hf_after}"
-        self._transfer(wallet, self.underlying_token, amount, from_wallet=False)
+        self._transfer_from_pool(wallet, amount)
         self.v_token.mint(wallet, amount)
 
     def repay(self, wallet: Wallet, amount: float):
@@ -470,7 +466,7 @@ class LendingPool:
             wallet.balances.get(self.v_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction"
         self.v_token.burn(wallet, amount)
-        self._transfer(wallet, self.underlying_token, amount, from_wallet=True)
+        self._transfer_from_wallet(wallet, amount)
 
     def calculate_interest_rates(self) -> tuple[float, float]:
         """
