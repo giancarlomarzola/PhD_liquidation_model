@@ -549,7 +549,7 @@ class LendingPool:
         liquidator: Wallet,
         borrower: Wallet,
         repay_amount: float,
-        collateral_pool: LendingPool | None = None,
+        collateral_pool: LendingPool,
     ):
         # Check borrower health factor
         assert borrower.health_factor < 1, (
@@ -569,23 +569,6 @@ class LendingPool:
             f"Liquidator '{liquidator.name}' has insufficient "
             f"{self.underlying_token.symbol} (need {repay_amount:.4f})"
         )
-
-        # TODO: Change what collateral is auto-selected; default to whatever is best for pool
-        #       (maybe: seize from pool with highest utilisation ratio that has sufficient funds)
-        # Determine collateral pool: auto-select highest-USD-value aToken if not specified
-        if collateral_pool is None:
-            best_pool = None
-            best_value = 0.0
-            for token, amount in borrower.balances.items():
-                if isinstance(token, aToken) and amount > 0:
-                    value = amount * token.pool.underlying_token.price
-                    if value > best_value:
-                        best_value = value
-                        best_pool = token.pool
-            assert (
-                best_pool is not None
-            ), f"Borrower '{borrower.name}' has no collateral to seize"
-            collateral_pool = best_pool
 
         # Calculate collateral to seize (repay USD value + liquidation bonus)
         repay_usd = repay_amount * self.underlying_token.price
