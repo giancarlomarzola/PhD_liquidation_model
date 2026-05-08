@@ -446,8 +446,8 @@ class LendingPool:
         assert ( # Check that user ins't withdrawing more than they supplied
             wallet.balances.get(self.a_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.a_token.symbol} for transaction"
-        self.a_token.burn(wallet, amount)
         self._transfer_from_pool(wallet, amount)
+        self.a_token.burn(wallet, amount)
 
     def borrow(self, wallet: Wallet, amount: float):
         if self.borrow_cap:
