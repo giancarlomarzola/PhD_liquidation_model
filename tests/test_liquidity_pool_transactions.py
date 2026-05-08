@@ -4,6 +4,7 @@ from environment.parameters import pool_parameters
 
 # To run tests: python -m pytest -v
 
+
 # ============================================================
 # Fixtures
 # ============================================================
@@ -48,12 +49,37 @@ def env_setup():
     }
 
 
+def assert_initial_state(env_setup):
+    """Assert every wallet and pool is in the default fixture state (no transactions yet)."""
+    alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc, wbtc = env_setup["usdc"], env_setup["wbtc"]
+    usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
+
+    assert alice.balances.get(usdc, 0) == pytest.approx(100_000)
+    assert alice.balances.get(wbtc, 0) == pytest.approx(5)
+    assert alice.balances.get(usdc_pool.a_token, 0) == pytest.approx(0)
+    assert alice.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+
+    assert bob.balances.get(usdc, 0) == pytest.approx(50_000)
+    assert bob.balances.get(wbtc, 0) == pytest.approx(2)
+    assert bob.balances.get(wbtc_pool.a_token, 0) == pytest.approx(0)
+    assert bob.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+
+    assert usdc_pool.available_liquidity_cash == pytest.approx(0)
+    assert usdc_pool.a_token.total_supply == pytest.approx(0)
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+
+    assert wbtc_pool.available_liquidity_cash == pytest.approx(0)
+    assert wbtc_pool.a_token.total_supply == pytest.approx(0)
+    assert wbtc_pool.v_token.total_supply == pytest.approx(0)
+
+
 # ============================================================
 # SUPPLY
 # ============================================================
 
 def test_supply_basic(env_setup):
-    """Alice supplies 1000 usdc to pool"""
+    """Alice supplies 1000 usdc to pool."""
     alice = env_setup["alice"]
     usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
@@ -70,7 +96,7 @@ def test_supply_basic(env_setup):
 
 
 def test_supply_insufficient_wallet_funds(env_setup):
-    """Alice attempts to supply more usdc than she has available """
+    """Alice attempts to supply more USDC than she has available."""
     alice = env_setup["alice"]
     usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
@@ -78,12 +104,13 @@ def test_supply_insufficient_wallet_funds(env_setup):
     with pytest.raises(AssertionError, match="does not have enough"):
         pool.supply(alice, 200_000)
 
-    # Alice's state untouched after the failure
+    # Alice's state untouched after failure
     assert alice.balances[usdc] == pytest.approx(100_000)
-    assert alice.balances.get(pool.a_token, 0) == 0
-    # Pool state untouched after the failure
-    assert pool.available_liquidity_cash == 0
-    assert pool.a_token.total_supply == 0
+    assert alice.balances.get(pool.a_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
+    assert pool.available_liquidity_cash == pytest.approx(0)
+    assert pool.a_token.total_supply == pytest.approx(0)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_supply_zero_amount(env_setup):
@@ -94,6 +121,8 @@ def test_supply_zero_amount(env_setup):
     with pytest.raises(AssertionError, match="Amount must be positive"):
         pool.supply(alice, 0)
 
+    assert_initial_state(env_setup)
+
 
 def test_supply_negative_amount(env_setup):
     """Negative supply must fail."""
@@ -103,18 +132,23 @@ def test_supply_negative_amount(env_setup):
     with pytest.raises(AssertionError, match="Amount must be positive"):
         pool.supply(alice, -100)
 
+    assert_initial_state(env_setup)
+
 
 def test_supply_at_supply_cap(env_setup):
-    """Supplying exactly the supply cap must succeed (boundary)."""
+    """Supplying exactly at the supply cap must succeed (boundary)."""
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
     pool.supply_cap = 50_000
 
     pool.supply(alice, 50_000)
 
+    assert alice.balances[usdc] == pytest.approx(50_000)
+    assert alice.balances[pool.a_token] == pytest.approx(50_000)
     assert pool.a_token.total_supply == pytest.approx(50_000)
     assert pool.available_liquidity_cash == pytest.approx(50_000)
-    assert alice.balances[pool.a_token] == pytest.approx(50_000)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_supply_exceeds_supply_cap(env_setup):
@@ -127,38 +161,49 @@ def test_supply_exceeds_supply_cap(env_setup):
     with pytest.raises(AssertionError, match="exceeds pool's supply cap"):
         pool.supply(alice, 50_001)
 
-    # Alice's state untouched after the failure
+    # Alice's state untouched after failure
     assert alice.balances[usdc] == pytest.approx(100_000)
-    assert alice.balances.get(pool.a_token, 0) == 0
-    # Pool state untouched after the failure
-    assert pool.available_liquidity_cash == 0
-    assert pool.a_token.total_supply == 0
+    assert alice.balances.get(pool.a_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
+    assert pool.available_liquidity_cash == pytest.approx(0)
+    assert pool.a_token.total_supply == pytest.approx(0)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_supply_when_underlying_not_in_wallet(env_setup):
-    """A wallet that has never received the underlying cannot supply."""
+    """A wallet that has never received the underlying token cannot supply."""
     env = env_setup["env"]
-    pool = env_setup["wbtc_pool"]
+    usdc_pool = env_setup["usdc_pool"]
+    wbtc_pool = env_setup["wbtc_pool"]
 
     charlie = Wallet(env, "charlie")  # no balances at all
 
     with pytest.raises(AssertionError, match="does not have enough"):
-        pool.supply(charlie, 1)
+        wbtc_pool.supply(charlie, 1)
 
-    assert pool.available_liquidity_cash == 0
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(0)
+    assert usdc_pool.a_token.total_supply == pytest.approx(0)
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+    assert wbtc_pool.available_liquidity_cash == pytest.approx(0)
+    assert wbtc_pool.a_token.total_supply == pytest.approx(0)
+    assert wbtc_pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_supply_accumulates_across_calls(env_setup):
     """Successive supplies stack — pool and wallet aggregate correctly."""
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
 
     pool.supply(alice, 1_000)
     pool.supply(alice, 2_500)
 
+    assert alice.balances[usdc] == pytest.approx(96_500)
     assert alice.balances[pool.a_token] == pytest.approx(3_500)
     assert pool.available_liquidity_cash == pytest.approx(3_500)
     assert pool.a_token.total_supply == pytest.approx(3_500)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 # ============================================================
@@ -180,6 +225,7 @@ def test_withdraw_basic(env_setup):
     # Pool
     assert pool.available_liquidity_cash == pytest.approx(3_000)
     assert pool.a_token.total_supply == pytest.approx(3_000)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_withdraw_more_than_supplied(env_setup):
@@ -193,12 +239,13 @@ def test_withdraw_more_than_supplied(env_setup):
     with pytest.raises(AssertionError, match="does not have sufficient"):
         pool.withdraw(alice, 1_500)
 
-    # Wallet
+    # Wallet state untouched after failure
     assert alice.balances[usdc] == pytest.approx(99_000)
     assert alice.balances[pool.a_token] == pytest.approx(1_000)
-    # Pool
+    # Pool state untouched after failure
     assert pool.available_liquidity_cash == pytest.approx(1_000)
     assert pool.a_token.total_supply == pytest.approx(1_000)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_withdraw_full_supplied_amount(env_setup):
@@ -210,12 +257,11 @@ def test_withdraw_full_supplied_amount(env_setup):
     pool.supply(alice, 1_000)
     pool.withdraw(alice, 1_000)
 
-    # Wallet returned to initial state for this pool
     assert alice.balances[usdc] == pytest.approx(100_000)
     assert alice.balances[pool.a_token] == pytest.approx(0)
-    # Pool drained
     assert pool.available_liquidity_cash == pytest.approx(0)
     assert pool.a_token.total_supply == pytest.approx(0)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_withdraw_with_no_outstanding_debt(env_setup):
@@ -224,20 +270,25 @@ def test_withdraw_with_no_outstanding_debt(env_setup):
     work without divide-by-zero errors.
     """
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
 
     pool.supply(alice, 1_000)
     assert alice.health_factor == float("inf")
 
     pool.withdraw(alice, 1_000)
+
     assert alice.health_factor == float("inf")
+    assert alice.balances[usdc] == pytest.approx(100_000)
     assert alice.balances[pool.a_token] == pytest.approx(0)
+    assert pool.available_liquidity_cash == pytest.approx(0)
+    assert pool.a_token.total_supply == pytest.approx(0)
 
 
 def test_withdraw_with_insufficient_pool_liquidity(env_setup):
     """If borrowers have drained the pool, withdraw must fail on liquidity check."""
     alice, bob = env_setup["alice"], env_setup["bob"]
-    usdc, wbtc = env_setup["usdc"], env_setup["wbtc"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 10_000)
@@ -251,16 +302,15 @@ def test_withdraw_with_insufficient_pool_liquidity(env_setup):
     # Alice's state untouched after failure
     assert alice.balances[usdc] == pytest.approx(90_000)
     assert alice.balances[usdc_pool.a_token] == pytest.approx(10_000)
-
     # Bob's state untouched after failure
     assert bob.balances[usdc] == pytest.approx(60_000)
-    assert bob.balances.get(wbtc, 0) == pytest.approx(1)  # 1 WBTC still in pool
     assert bob.balances[usdc_pool.v_token] == pytest.approx(10_000)
-
     # Pool state untouched after failure
     assert usdc_pool.available_liquidity_cash == pytest.approx(0)
     assert usdc_pool.a_token.total_supply == pytest.approx(10_000)
     assert usdc_pool.v_token.total_supply == pytest.approx(10_000)
+    assert wbtc_pool.available_liquidity_cash == pytest.approx(1)
+    assert wbtc_pool.a_token.total_supply == pytest.approx(1)
 
 
 def test_withdraw_causes_health_factor_below_one(env_setup):
@@ -276,9 +326,10 @@ def test_withdraw_causes_health_factor_below_one(env_setup):
     with pytest.raises(AssertionError, match="liquidation risk"):
         wbtc_pool.withdraw(bob, 1)   # would halve collateral and break HF
 
-    # HF unchanged after the rejected withdraw
+    # HF and bob's positions untouched after failure
     assert bob.health_factor == pytest.approx(hf_before)
     assert bob.balances[wbtc_pool.a_token] == pytest.approx(2)
+    assert bob.balances[usdc_pool.v_token] == pytest.approx(50_000)
     # Pool states untouched after failure
     assert wbtc_pool.available_liquidity_cash == pytest.approx(2)
     assert wbtc_pool.a_token.total_supply == pytest.approx(2)
@@ -290,21 +341,39 @@ def test_withdraw_causes_health_factor_below_one(env_setup):
 def test_withdraw_zero_amount(env_setup):
     """Zero withdraw must fail."""
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
 
     pool.supply(alice, 1_000)
+
     with pytest.raises(AssertionError, match="Amount must be positive"):
         pool.withdraw(alice, 0)
+
+    # State untouched after failure
+    assert alice.balances[usdc] == pytest.approx(99_000)
+    assert alice.balances[pool.a_token] == pytest.approx(1_000)
+    assert pool.available_liquidity_cash == pytest.approx(1_000)
+    assert pool.a_token.total_supply == pytest.approx(1_000)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_withdraw_negative_amount(env_setup):
     """Negative withdraw must fail."""
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
 
     pool.supply(alice, 1_000)
+
     with pytest.raises(AssertionError, match="Amount must be positive"):
         pool.withdraw(alice, -1)
+
+    # State untouched after failure
+    assert alice.balances[usdc] == pytest.approx(99_000)
+    assert alice.balances[pool.a_token] == pytest.approx(1_000)
+    assert pool.available_liquidity_cash == pytest.approx(1_000)
+    assert pool.a_token.total_supply == pytest.approx(1_000)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_withdraw_when_atoken_not_in_wallet(env_setup):
@@ -312,13 +381,12 @@ def test_withdraw_when_atoken_not_in_wallet(env_setup):
     alice = env_setup["alice"]
     pool = env_setup["usdc_pool"]
 
-    # Alice has never supplied — she has no aToken entry at all.
-    # The current implementation surfaces this as either AssertionError or TypeError
-    # depending on the comparison path; either is acceptable as a hard rejection.
     with pytest.raises((AssertionError, TypeError)):
         pool.withdraw(alice, 1)
 
-    assert pool.available_liquidity_cash == 0
+    assert pool.available_liquidity_cash == pytest.approx(0)
+    assert pool.a_token.total_supply == pytest.approx(0)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 # ============================================================
@@ -327,7 +395,8 @@ def test_withdraw_when_atoken_not_in_wallet(env_setup):
 
 def test_borrow_basic(env_setup):
     """Basic borrow: underlying flows out of pool, vTokens minted 1:1."""
-    alice, bob, usdc = env_setup["alice"], env_setup["bob"], env_setup["usdc"]
+    alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -346,6 +415,7 @@ def test_borrow_basic(env_setup):
 def test_borrow_insufficient_collateral(env_setup):
     """Borrow with insufficient collateral must fail (HF check)."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 100_000)
@@ -354,14 +424,19 @@ def test_borrow_insufficient_collateral(env_setup):
     with pytest.raises(AssertionError, match="liquidation risk"):
         usdc_pool.borrow(bob, 50_000)
 
-    # No state changes
-    assert usdc_pool.v_token.total_supply == 0
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(50_000)
+    assert bob.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
     assert usdc_pool.available_liquidity_cash == pytest.approx(100_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+    assert usdc_pool.a_token.total_supply == pytest.approx(100_000)
 
 
 def test_borrow_insufficient_pool_liquidity(env_setup):
     """Borrow must fail if the pool has insufficient cash, even with ample collateral."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 1_000)
@@ -370,13 +445,19 @@ def test_borrow_insufficient_pool_liquidity(env_setup):
     with pytest.raises(AssertionError, match="pool does not have enough liquidity"):
         usdc_pool.borrow(bob, 5_000)
 
-    assert usdc_pool.v_token.total_supply == 0
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(50_000)
+    assert bob.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
     assert usdc_pool.available_liquidity_cash == pytest.approx(1_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+    assert usdc_pool.a_token.total_supply == pytest.approx(1_000)
 
 
 def test_borrow_at_borrow_cap(env_setup):
     """Borrowing exactly at the borrow cap must succeed (boundary)."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 100_000)
@@ -385,14 +466,16 @@ def test_borrow_at_borrow_cap(env_setup):
 
     usdc_pool.borrow(bob, 10_000)
 
-    assert usdc_pool.v_token.total_supply == pytest.approx(10_000)
+    assert bob.balances[usdc] == pytest.approx(60_000)
     assert bob.balances[usdc_pool.v_token] == pytest.approx(10_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(10_000)
     assert usdc_pool.available_liquidity_cash == pytest.approx(90_000)
 
 
 def test_borrow_exceeds_borrow_cap(env_setup):
     """Borrowing one unit above the borrow cap must fail."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 100_000)
@@ -402,28 +485,46 @@ def test_borrow_exceeds_borrow_cap(env_setup):
     with pytest.raises(AssertionError, match="exceeds pool's borrow cap"):
         usdc_pool.borrow(bob, 10_001)
 
-    assert usdc_pool.v_token.total_supply == 0
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(50_000)
+    assert bob.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+    assert usdc_pool.available_liquidity_cash == pytest.approx(100_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(100_000)
 
 
 def test_borrow_health_factor_limit(env_setup):
-    """A borrow that would push HF below 1 must fail (existing test, retained)."""
+    """A borrow that would push HF below 1 must fail."""
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
 
-    # Alice supplies USDC and borrows against it
     pool.supply(alice, 1_000)
-
     safe_borrow = alice.available_collateral_usd * 0.5
     pool.borrow(alice, safe_borrow)
     assert alice.health_factor > 1
 
+    hf_before = alice.health_factor
+    cash_before = pool.available_liquidity_cash
+    v_supply_before = pool.v_token.total_supply
+
     with pytest.raises(AssertionError, match="liquidation risk"):
         pool.borrow(alice, 1_000_000)
+
+    # Alice's state untouched after failure
+    assert alice.balances[usdc] == pytest.approx(99_000 + safe_borrow)
+    assert alice.balances[pool.v_token] == pytest.approx(safe_borrow)
+    assert alice.health_factor == pytest.approx(hf_before)
+    # Pool state untouched after failure
+    assert pool.available_liquidity_cash == pytest.approx(cash_before)
+    assert pool.v_token.total_supply == pytest.approx(v_supply_before)
 
 
 def test_borrow_zero_amount(env_setup):
     """Zero borrow must fail."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 1_000)
@@ -431,6 +532,14 @@ def test_borrow_zero_amount(env_setup):
 
     with pytest.raises(AssertionError, match="Amount must be positive"):
         usdc_pool.borrow(bob, 0)
+
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(50_000)
+    assert bob.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(1_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+    assert usdc_pool.a_token.total_supply == pytest.approx(1_000)
 
 
 def test_borrow_negative_amount(env_setup):
@@ -440,6 +549,7 @@ def test_borrow_negative_amount(env_setup):
     fine — the request is rejected either way.
     """
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 1_000)
@@ -448,7 +558,13 @@ def test_borrow_negative_amount(env_setup):
     with pytest.raises(AssertionError):
         usdc_pool.borrow(bob, -1)
 
-    assert usdc_pool.v_token.total_supply == 0
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(50_000)
+    assert bob.balances.get(usdc_pool.v_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(1_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(0)
+    assert usdc_pool.a_token.total_supply == pytest.approx(1_000)
 
 
 def test_borrow_decreases_health_factor(env_setup):
@@ -475,7 +591,8 @@ def test_borrow_decreases_health_factor(env_setup):
 
 def test_repay_basic(env_setup):
     """Basic repay: vTokens burned, underlying returned to pool."""
-    alice, bob, usdc = env_setup["alice"], env_setup["bob"], env_setup["usdc"]
+    alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -491,11 +608,13 @@ def test_repay_basic(env_setup):
     # Pool
     assert usdc_pool.available_liquidity_cash == pytest.approx(cash_before + 5_000)
     assert usdc_pool.v_token.total_supply == pytest.approx(15_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(50_000)  # supply unchanged
 
 
 def test_repay_more_than_borrowed(env_setup):
     """Repaying more than the wallet's vToken balance must fail."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -505,14 +624,19 @@ def test_repay_more_than_borrowed(env_setup):
     with pytest.raises(AssertionError, match="does not have sufficient"):
         usdc_pool.repay(bob, 2_000)
 
-    # Position unchanged
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(51_000)
     assert bob.balances[usdc_pool.v_token] == pytest.approx(1_000)
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(49_000)
     assert usdc_pool.v_token.total_supply == pytest.approx(1_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(50_000)
 
 
 def test_repay_full_borrowed_amount(env_setup):
     """Repaying exactly the full debt zeroes the position."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -520,15 +644,18 @@ def test_repay_full_borrowed_amount(env_setup):
     usdc_pool.borrow(bob, 10_000)
     usdc_pool.repay(bob, 10_000)
 
+    assert bob.balances[usdc] == pytest.approx(50_000)
     assert bob.balances[usdc_pool.v_token] == pytest.approx(0)
     assert usdc_pool.v_token.total_supply == pytest.approx(0)
     assert usdc_pool.available_liquidity_cash == pytest.approx(50_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(50_000)
     assert bob.health_factor == float("inf")  # debt fully cleared
 
 
 def test_repay_insufficient_wallet_funds(env_setup):
     """Repay must fail when wallet does not have enough underlying token."""
-    alice, bob, usdc = env_setup["alice"], env_setup["bob"], env_setup["usdc"]
+    alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -537,15 +664,24 @@ def test_repay_insufficient_wallet_funds(env_setup):
 
     # Drain Bob's USDC so he can't repay
     usdc.burn(bob, bob.balances[usdc])
-    assert bob.balances[usdc] == 0
+    assert bob.balances[usdc] == pytest.approx(0)
 
     with pytest.raises(AssertionError, match="does not have enough"):
         usdc_pool.repay(bob, 5_000)
+
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(0)
+    assert bob.balances[usdc_pool.v_token] == pytest.approx(10_000)
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(40_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(10_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(50_000)
 
 
 def test_repay_zero_amount(env_setup):
     """Zero repay must fail."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -555,10 +691,19 @@ def test_repay_zero_amount(env_setup):
     with pytest.raises(AssertionError, match="Amount must be positive"):
         usdc_pool.repay(bob, 0)
 
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(55_000)
+    assert bob.balances[usdc_pool.v_token] == pytest.approx(5_000)
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(45_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(5_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(50_000)
+
 
 def test_repay_negative_amount(env_setup):
     """Negative repay must fail."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -568,16 +713,31 @@ def test_repay_negative_amount(env_setup):
     with pytest.raises(AssertionError, match="Amount must be positive"):
         usdc_pool.repay(bob, -1)
 
+    # Bob's state untouched after failure
+    assert bob.balances[usdc] == pytest.approx(55_000)
+    assert bob.balances[usdc_pool.v_token] == pytest.approx(5_000)
+    # Pool state untouched after failure
+    assert usdc_pool.available_liquidity_cash == pytest.approx(45_000)
+    assert usdc_pool.v_token.total_supply == pytest.approx(5_000)
+    assert usdc_pool.a_token.total_supply == pytest.approx(50_000)
+
 
 def test_repay_when_vtoken_not_in_wallet(env_setup):
     """A wallet that has never borrowed cannot repay."""
     alice = env_setup["alice"]
+    usdc = env_setup["usdc"]
     pool = env_setup["usdc_pool"]
 
-    # No vToken entry exists for Alice — implementation surfaces this
-    # as either AssertionError or TypeError; either is a valid rejection.
     with pytest.raises((AssertionError, TypeError)):
         pool.repay(alice, 1)
+
+    # Alice's state untouched after failure
+    assert alice.balances[usdc] == pytest.approx(100_000)
+    assert alice.balances.get(pool.v_token, 0) == pytest.approx(0)
+    # Pool state untouched after failure
+    assert pool.available_liquidity_cash == pytest.approx(0)
+    assert pool.a_token.total_supply == pytest.approx(0)
+    assert pool.v_token.total_supply == pytest.approx(0)
 
 
 def test_repay_increases_health_factor(env_setup):
@@ -656,8 +816,9 @@ def test_full_supply_borrow_repay_withdraw_cycle(env_setup):
 
 
 def test_partial_cycle_state_consistency(env_setup):
-    """Partial repay + partial withdraw should leave fully consistent intermediate state."""
+    """Partial repay + partial withdraw should leave a fully consistent intermediate state."""
     alice, bob = env_setup["alice"], env_setup["bob"]
+    usdc = env_setup["usdc"]
     usdc_pool, wbtc_pool = env_setup["usdc_pool"], env_setup["wbtc_pool"]
 
     usdc_pool.supply(alice, 50_000)
@@ -672,7 +833,9 @@ def test_partial_cycle_state_consistency(env_setup):
     assert usdc_pool.v_token.total_supply == pytest.approx(15_000)
 
     # Wallet positions match pool aggregates
+    assert alice.balances[usdc] == pytest.approx(60_000)   # 100k - 50k supply + 10k withdraw
     assert alice.balances[usdc_pool.a_token] == pytest.approx(40_000)
+    assert bob.balances[usdc] == pytest.approx(65_000)     # 50k + 20k borrow - 5k repay
     assert bob.balances[usdc_pool.v_token] == pytest.approx(15_000)
 
 
@@ -702,6 +865,7 @@ def test_multi_wallet_supply_and_borrow(env_setup):
     assert alice.balances[usdc_pool.a_token] == pytest.approx(40_000)
     assert charlie.balances[usdc_pool.a_token] == pytest.approx(20_000)
     assert bob.balances[usdc_pool.v_token] == pytest.approx(30_000)
+    assert bob.balances[usdc] == pytest.approx(80_000)   # 50k initial + 30k borrowed
 
 
 def test_multi_wallet_independent_health_factors(env_setup):
@@ -768,7 +932,10 @@ def test_collateral_locked_until_debt_repaid(env_setup):
     # While debt outstanding, full collateral withdraw must fail
     with pytest.raises(AssertionError, match="liquidation risk"):
         wbtc_pool.withdraw(bob, 2)
+
     assert wbtc_pool.a_token.total_supply == pytest.approx(2)
+    assert bob.balances[wbtc_pool.a_token] == pytest.approx(2)
+    assert bob.balances[usdc_pool.v_token] == pytest.approx(10_000)
 
     # After full repayment, the same withdrawal succeeds
     usdc_pool.repay(bob, 10_000)

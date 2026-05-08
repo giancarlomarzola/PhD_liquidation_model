@@ -417,33 +417,39 @@ class LendingPool:
         # Helper function to handle transfers from Wallet to LendingPool
         assert amount > 0, "Amount must be positive"
         wallet_balance = wallet.balances.get(self.underlying_token, 0.0)
-        assert wallet_balance >= amount, f"Wallet '{wallet.name}' does not have enough {self.underlying_token.symbol}"
+        assert (
+            wallet_balance >= amount
+        ), f"Wallet '{wallet.name}' does not have enough {self.underlying_token.symbol}"
         wallet.balances[self.underlying_token] = wallet_balance - amount
         self.available_liquidity_cash += amount
 
     def _transfer_from_pool(self, wallet: Wallet, amount: float):
         assert amount > 0, "Amount must be positive"
-        assert self.available_liquidity_cash >= amount, f"{self.underlying_token.symbol} pool does not have enough liquidity"
+        assert (
+            self.available_liquidity_cash >= amount
+        ), f"{self.underlying_token.symbol} pool does not have enough liquidity"
         self.available_liquidity_cash -= amount
-        wallet.balances[self.underlying_token] = wallet.balances.get(self.underlying_token, 0.0) + amount
+        wallet.balances[self.underlying_token] = (
+            wallet.balances.get(self.underlying_token, 0.0) + amount
+        )
 
     # TODO: LendingPool - Add interest rates to supply/withdraw/borrow/repay
     #       including any additional needed checks and reserve_factor consequences
 
     def supply(self, wallet: Wallet, amount: float):
         if self.supply_cap:
-            assert( # Check supply cap
-                (self.a_token.total_supply + amount) <= self.supply_cap
-            ), "Transaction exceeds pool's supply cap"
+            assert (  # Check supply cap
+                self.a_token.total_supply + amount
+            ) <= self.supply_cap, "Transaction exceeds pool's supply cap"
         self._transfer_from_wallet(wallet, amount)
         self.a_token.mint(wallet, amount)
 
     def withdraw(self, wallet: Wallet, amount: float):
         hf_after = wallet.health_factor_after(collateral_change={self.a_token: -amount})
-        assert ( # Check HF
+        assert (  # Check HF
             hf_after > 1
         ), f"Withdraw would cause liquidation risk -- Health factor after transaction = {hf_after}"
-        assert ( # Check that user ins't withdrawing more than they supplied
+        assert (  # Check that user ins't withdrawing more than they supplied
             wallet.balances.get(self.a_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.a_token.symbol} for transaction"
         self._transfer_from_pool(wallet, amount)
@@ -451,22 +457,22 @@ class LendingPool:
 
     def borrow(self, wallet: Wallet, amount: float):
         if self.borrow_cap:
-            assert( # Check borrow cap
-                (self.v_token.total_supply + amount) <= self.borrow_cap
-            ), "Transaction exceeds pool's borrow cap"
+            assert (  # Check borrow cap
+                self.v_token.total_supply + amount
+            ) <= self.borrow_cap, "Transaction exceeds pool's borrow cap"
         hf_after = wallet.health_factor_after(debt_change={self.v_token: amount})
-        assert ( # Check HF
+        assert (  # Check HF
             hf_after > 1
         ), f"Borrow would cause liquidation risk -- Health factor after transaction = {hf_after}"
         self._transfer_from_pool(wallet, amount)
         self.v_token.mint(wallet, amount)
 
     def repay(self, wallet: Wallet, amount: float):
-        assert ( # Check that user isn't repaying more than they borrowed
+        assert (  # Check that user isn't repaying more than they borrowed
             wallet.balances.get(self.v_token) >= amount
         ), f"Wallet '{wallet.name}' does not have sufficient {self.v_token.symbol} for transaction"
-        self.v_token.burn(wallet, amount)
         self._transfer_from_wallet(wallet, amount)
+        self.v_token.burn(wallet, amount)
 
     def calculate_interest_rates(self) -> tuple[float, float]:
         """
