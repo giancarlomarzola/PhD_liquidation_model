@@ -1,13 +1,6 @@
 from __future__ import annotations
 from environment.parameters import pool_parameters
 
-# To worry about later:
-# Creating the users so that overall there is a given LTV distribution, for given token pairs
-# Discretionary activity rate
-# Token price series generation
-# Liquidation collateral pool choice (part of agent strategies)
-# Figuring out what parameters to use for simulation
-
 
 class DefiEnv:
     """
@@ -47,11 +40,12 @@ class DefiEnv:
     def __init__(
         self,
         blocknumber: int = 0,
-        tokens: dict[str, Token] | None = None,  # use token symbol as key
-        prices: dict[str, float] | None = None,  # price at given block
-        wallets: dict[str, Wallet] | None = None,  # Wallets present on the blockchain
+        tokens: dict[str, Token] | None = None,
+        prices: dict[str, float] | None = None,
+        wallets: dict[str, Wallet] | None = None,
         lending_pools: dict[str, LendingPool] | None = None,
-        blocks_per_year: int = 2_628_000,  # ~Ethereum mainnet (~7200 blocks/day * 365)
+        blocks_per_year: int = 2_628_000,
+        price_provider = None,  # PriceProvider instance (optional)
     ):
         if tokens is None:
             tokens = {}
@@ -71,6 +65,7 @@ class DefiEnv:
         self.wallets = wallets
         self.lending_pools = lending_pools
         self.blocks_per_year = blocks_per_year
+        self.price_provider = price_provider
 
     # Properties: state_summary, prices,
     # Methods: advance_blocks
@@ -83,22 +78,26 @@ class DefiEnv:
     def advance_blocks(self, num_blocks: int, new_prices: dict[str, float] | None = None):
         """
         Advance the simulation by num_blocks.
-        
+
         Triggers:
         - Block number increment
         - Interest accrual on all pools
-        - Optional price updates
-        
-        Interest rates are recalculated automatically as part of accrue_interest().
+        - Price updates (from price_provider or new_prices parameter)
+
+        If price_provider is set, advances it and fetches new prices.
+        Otherwise, uses new_prices if provided.
         """
         self.blocknumber += num_blocks
-        
+
         # Accrue interest on all pools (which recalculates interest rates internally)
         for pool in self.lending_pools.values():
             pool.accrue_interest(num_blocks)
-        
-        # Update prices if provided
-        if new_prices:
+
+        # Update prices from provider or parameter
+        if self.price_provider:
+            self.price_provider.advance_time(num_blocks)
+            self.prices = self.price_provider.get_prices()
+        elif new_prices:
             self.prices.update(new_prices)
 
 

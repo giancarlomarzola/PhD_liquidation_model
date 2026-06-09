@@ -1,0 +1,145 @@
+"""
+Example: Load empirical Aave data and run simulation.
+
+This demonstrates:
+- Loading historical price data from parquet files
+- Inspecting available data
+- Running simulation with real market prices
+"""
+
+import sys
+sys.path.insert(0, r'c:\Users\gianc\repo\PhD_liquidation_model')
+
+from simulation import (
+    EmpiricalPriceProvider,
+    ScenarioConfig,
+    InitialMarketState,
+    ScenarioBuilder,
+    Experiment,
+    LiquidatorStrategy,
+)
+
+
+def main():
+    print("=" * 70)
+    print("Loading empirical Aave data...")
+    print("=" * 70)
+
+    # Load empirical price data
+    try:
+        provider = EmpiricalPriceProvider(
+            tokens=["WETH", "WBTC", "USDC", "DAI", "LINK", "AAVE"]
+        )
+
+        print(f"\n✓ Data loaded successfully")
+        print(f"  Available tokens: {provider.get_available_tokens()}")
+        min_block, max_block = provider.get_block_range()
+        print(f"  Block range: {min_block:,} to {max_block:,}")
+        print(f"  Total blocks: {max_block - min_block:,}")
+
+        # Get initial prices
+        initial_prices = provider.get_prices()
+        print(f"\n  Initial prices:")
+        for symbol, price in sorted(initial_prices.items()):
+            print(f"    {symbol}: ${price:,.2f}")
+
+    except Exception as e:
+        print(f"✗ Failed to load data: {e}")
+        print("\nNote: This example requires empirical data in data/aave_parquet/")
+        return
+
+    # Create a scenario with empirical prices
+    initial_state = InitialMarketState(
+        tokens=initial_prices,
+        pools={
+            "USDC": {
+                "interest_slope_1": 0.04,
+                "interest_slope_2": 0.60,
+                "interest_base_rate": 0.0,
+                "optimal_usage_ratio": 0.9,
+                "reserve_rate": 0.1,
+                "max_ltv": 0.8,
+                "liquidation_bonus": 0.05,
+                "liquidation_threshold": 0.83,
+                "closing_factor": 0.5,
+            },
+            "WETH": {
+                "interest_slope_1": 0.04,
+                "interest_slope_2": 0.60,
+                "interest_base_rate": 0.0,
+                "optimal_usage_ratio": 0.9,
+                "reserve_rate": 0.1,
+                "max_ltv": 0.825,
+                "liquidation_bonus": 0.05,
+                "liquidation_threshold": 0.86,
+                "closing_factor": 0.5,
+            },
+            "WBTC": {
+                "interest_slope_1": 0.04,
+                "interest_slope_2": 0.60,
+                "interest_base_rate": 0.0,
+                "optimal_usage_ratio": 0.9,
+                "reserve_rate": 0.1,
+                "max_ltv": 0.73,
+                "liquidation_bonus": 0.05,
+                "liquidation_threshold": 0.78,
+                "closing_factor": 0.5,
+            },
+        },
+        wallets={
+            "lp_usdc": {
+                "is_liquidator": False,
+                "balances": {"USDC": 5_000_000},
+            },
+            "trader_eth": {
+                "is_liquidator": False,
+                "balances": {"WETH": 100},
+            },
+            "arbitrageur": {
+                "is_liquidator": True,
+                "balances": {"USDC": 1_000_000},
+            },
+        },
+    )
+
+    config = ScenarioConfig(
+        name="empirical_aave_replay",
+        description="Replay recent Aave market with empirical price data",
+        initial_market_state=initial_state,
+        price_provider=provider,
+        duration_blocks=min(100_000, max_block - min_block - 1000),
+        liquidators={"arbitrageur": LiquidatorStrategy(enabled=True)},
+    )
+
+    print("\n" + "=" * 70)
+    print("Running simulation with empirical prices...")
+    print("=" * 70)
+
+    builder = ScenarioBuilder()
+    experiment = Experiment(config, builder)
+    experiment.setup()
+    experiment.run(verbose=True)
+
+    # Analyze results
+    results = experiment.get_results()
+    summary = results['metrics']['summary']
+
+    print("\n" + "=" * 70)
+    print("RESULTS")
+    print("=" * 70)
+
+    print(f"\nSystem Health:")
+    print(f"  Peak bad debt: ${summary['peak_bad_debt_usd']:,.2f}")
+    print(f"  Final bad debt: ${summary['final_bad_debt_usd']:,.2f}")
+    print(f"  Peak undercollateralized: {summary['peak_undercollateralized']}")
+    print(f"  Minimum health factor: {summary['min_health_factor']:.4f}")
+    print(f"  Total liquidations: {summary['total_liquidations']}")
+
+    if summary['total_liquidations'] > 0:
+        print(f"\n  ⚠ Undercollateralization events detected!")
+        print(f"    {summary['total_liquidations']} liquidation(s) occurred")
+        print(f"    Peak undercollateralized users: {summary['peak_undercollateralized']}")
+
+
+if __name__ == "__main__":
+    main()
