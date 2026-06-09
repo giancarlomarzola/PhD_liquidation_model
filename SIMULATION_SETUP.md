@@ -355,7 +355,7 @@ To use actual Aave market data:
 from simulation import EmpiricalPriceProvider
 
 provider = EmpiricalPriceProvider(
-    data_dir=r"c:\Users\gianc\repo\PhD_liquidation_model\data\aave_parquet",
+    # data_dir defaults to ./data/aave_parquet (relative to project root)
     tokens=["WETH", "WBTC", "USDC", "DAI", "LINK"],
 )
 

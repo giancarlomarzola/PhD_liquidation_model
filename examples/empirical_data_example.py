@@ -2,13 +2,17 @@
 Example: Load empirical Aave data and run simulation.
 
 This demonstrates:
-- Loading historical price data from parquet files
+- Loading historical price data from parquet files (filtered by block range and tokens)
 - Inspecting available data
 - Running simulation with real market prices
 """
 
 import sys
-sys.path.insert(0, r'c:\Users\gianc\repo\PhD_liquidation_model')
+from pathlib import Path
+
+# Make imports relative to project root
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 from simulation import (
     EmpiricalPriceProvider,
@@ -26,12 +30,16 @@ def main():
     print("=" * 70)
 
     # Load empirical price data
+    # For testing, load only a subset of available blocks to reduce memory usage
+    # Available block range: 20,921,766 to 20,949,543
     try:
         provider = EmpiricalPriceProvider(
-            tokens=["WETH", "WBTC", "USDC", "DAI", "LINK", "AAVE"]
+            tokens=["WETH", "WBTC", "USDC", "DAI", "LINK", "AAVE"],
+            start_block=20_921_766,
+            end_block=20_924_500,
         )
 
-        print(f"\n✓ Data loaded successfully")
+        print("\n[OK] Data loaded successfully")
         print(f"  Available tokens: {provider.get_available_tokens()}")
         min_block, max_block = provider.get_block_range()
         print(f"  Block range: {min_block:,} to {max_block:,}")
@@ -44,8 +52,11 @@ def main():
             print(f"    {symbol}: ${price:,.2f}")
 
     except Exception as e:
-        print(f"✗ Failed to load data: {e}")
-        print("\nNote: This example requires empirical data in data/aave_parquet/")
+        print(f"[ERROR] Failed to load data: {e}")
+        print("\nNote: This example requires empirical data in ./data/aave_parquet/")
+        print(
+            "You can adjust start_block and end_block parameters to load different block ranges."
+        )
         return
 
     # Create a scenario with empirical prices
@@ -102,12 +113,15 @@ def main():
         },
     )
 
+    # Run simulation for the full duration of loaded data
+    duration_blocks = max_block - min_block
+
     config = ScenarioConfig(
         name="empirical_aave_replay",
         description="Replay recent Aave market with empirical price data",
         initial_market_state=initial_state,
         price_provider=provider,
-        duration_blocks=min(100_000, max_block - min_block - 1000),
+        duration_blocks=duration_blocks,
         liquidators={"arbitrageur": LiquidatorStrategy(enabled=True)},
     )
 
@@ -122,7 +136,7 @@ def main():
 
     # Analyze results
     results = experiment.get_results()
-    summary = results['metrics']['summary']
+    summary = results["metrics"]["summary"]
 
     print("\n" + "=" * 70)
     print("RESULTS")
@@ -135,10 +149,12 @@ def main():
     print(f"  Minimum health factor: {summary['min_health_factor']:.4f}")
     print(f"  Total liquidations: {summary['total_liquidations']}")
 
-    if summary['total_liquidations'] > 0:
-        print(f"\n  ⚠ Undercollateralization events detected!")
+    if summary["total_liquidations"] > 0:
+        print("\n  [WARNING] Undercollateralization events detected!")
         print(f"    {summary['total_liquidations']} liquidation(s) occurred")
-        print(f"    Peak undercollateralized users: {summary['peak_undercollateralized']}")
+        print(
+            f"    Peak undercollateralized users: {summary['peak_undercollateralized']}"
+        )
 
 
 if __name__ == "__main__":

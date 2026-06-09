@@ -143,32 +143,54 @@ class EmpiricalPriceProvider(PriceProvider):
     - priceInMarketReferenceCurrency
     """
 
-    def __init__(self, data_dir: str = None, tokens: list = None, resample_blocks: int = 1):
+    def __init__(self, data_dir: str = None, tokens: list = None, resample_blocks: int = 1,
+                 start_block: int = None, end_block: int = None):
         """
         Parameters
         ----------
         data_dir : str, optional
-            Path to data directory. Default: data/aave_parquet/
+            Path to data directory. Default: data/aave_parquet/ (relative to project root)
         tokens : list, optional
             Tokens to load. If None, loads all available.
         resample_blocks : int, optional
             Interval at which to sample prices (1 = every block, 2 = every 2 blocks, etc.)
+        start_block : int, optional
+            Start block number (inclusive). Only loads data from this block onward.
+        end_block : int, optional
+            End block number (inclusive). Only loads data up to this block.
         """
         if data_dir is None:
-            data_dir = r"c:\Users\gianc\repo\PhD_liquidation_model\data\aave_parquet"
+            from pathlib import Path
+            project_root = Path(__file__).parent.parent
+            data_dir = str(project_root / "data" / "aave_parquet")
 
         self.data_dir = data_dir
         self.resample_blocks = resample_blocks
+        self.start_block = start_block
+        self.end_block = end_block
         self._load_data(tokens)
 
     def _load_data(self, tokens: list = None) -> None:
-        """Load and preprocess parquet files."""
+        """Load and preprocess parquet files with optional block range filtering."""
         parquet_files = sorted(glob.glob(f"{self.data_dir}/*.parquet"))
 
         if not parquet_files:
             raise FileNotFoundError(f"No parquet files found in {self.data_dir}")
 
-        dfs = [pd.read_parquet(f) for f in parquet_files]
+        dfs = []
+        for f in parquet_files:
+            # Read only needed columns
+            cols = ['blockNumber', 'symbol', 'priceInMarketReferenceCurrency']
+            df = pd.read_parquet(f, columns=cols)
+
+            # Apply block range filters
+            if self.start_block is not None:
+                df = df[df['blockNumber'] >= self.start_block]
+            if self.end_block is not None:
+                df = df[df['blockNumber'] <= self.end_block]
+
+            dfs.append(df)
+
         df = pd.concat(dfs, ignore_index=True)
 
         if tokens:
