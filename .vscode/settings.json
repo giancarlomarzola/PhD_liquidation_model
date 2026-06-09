@@ -2,15 +2,14 @@
     "editor.formatOnSave": true,
     "editor.formatOnSaveMode": "file",
     "editor.formatOnPaste": false,
-
-    "python.testing.pytestArgs": ["tests"],
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
     "python.testing.unittestEnabled": false,
     "python.testing.nosetestsEnabled": false,
     "python.testing.pytestEnabled": true,
-
     "jupyter.notebookFileRoot": "${workspaceFolder}",
-    "todo-tree.tree.scanMode": "workspace",
-
+    "better-todo-tree.tree.scanMode": "workspace",
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter"
     },
