@@ -486,10 +486,11 @@ class LendingPool:
         self._transfer_from_wallet(wallet, amount)
         # Mint scaled aTokens: scaled_amount = amount / supply_index
         scaled_amount = amount / self.supply_index
-        wallet.balances[self.a_token] = self._get_scaled_supply_balance(wallet) + scaled_amount
+        self.a_token.mint(wallet, scaled_amount)
         self.total_scaled_supply += scaled_amount
 
     def withdraw(self, wallet: Wallet, amount: float):
+        assert amount > 0, "Amount must be positive"
         hf_after = wallet.health_factor_after(collateral_change={self.a_token: -amount})
         assert (  # Check HF
             hf_after > 1
@@ -501,10 +502,11 @@ class LendingPool:
         self._transfer_from_pool(wallet, amount)
         # Burn scaled aTokens
         scaled_amount = amount / self.supply_index
-        wallet.balances[self.a_token] = self._get_scaled_supply_balance(wallet) - scaled_amount
+        self.a_token.burn(wallet, scaled_amount)
         self.total_scaled_supply -= scaled_amount
 
     def borrow(self, wallet: Wallet, amount: float):
+        assert amount > 0, "Amount must be positive"
         if self.borrow_cap:
             total_actual_borrow = self.total_scaled_borrow * self.borrow_index
             assert (
@@ -517,10 +519,11 @@ class LendingPool:
         self._transfer_from_pool(wallet, amount)
         # Mint scaled vTokens: scaled_amount = amount / borrow_index
         scaled_amount = amount / self.borrow_index
-        wallet.balances[self.v_token] = self._get_scaled_borrow_balance(wallet) + scaled_amount
+        self.v_token.mint(wallet, scaled_amount)
         self.total_scaled_borrow += scaled_amount
 
     def repay(self, wallet: Wallet, amount: float):
+        assert amount > 0, "Amount must be positive"
         actual_balance = self.get_actual_borrow_balance(wallet)
         assert (  # Check that user isn't repaying more than they borrowed
             actual_balance >= amount
@@ -528,7 +531,7 @@ class LendingPool:
         self._transfer_from_wallet(wallet, amount)
         # Burn scaled vTokens
         scaled_amount = amount / self.borrow_index
-        wallet.balances[self.v_token] = self._get_scaled_borrow_balance(wallet) - scaled_amount
+        self.v_token.burn(wallet, scaled_amount)
         self.total_scaled_borrow -= scaled_amount
 
     def calculate_interest_rates(self) -> tuple[float, float]:
@@ -571,24 +574,28 @@ class LendingPool:
         Treasury receives the reserve_rate portion of borrow interest.
         """
         if blocks_elapsed <= 0:
-            return 
+            return
 
         borrow_rate, supply_rate = self.calculate_interest_rates()
         blocks_per_year = self.env.blocks_per_year
+
+        # Calculate interest using OLD indices (before they grow)
+        total_actual_borrow = self.total_scaled_borrow * self.borrow_index
+        total_actual_supply = self.total_scaled_supply * self.supply_index
 
         # Calculate growth factors
         borrow_factor = (1 + borrow_rate) ** (blocks_elapsed / blocks_per_year) - 1
         supply_factor = (1 + supply_rate) ** (blocks_elapsed / blocks_per_year) - 1
 
+        # Calculate interest accrued
+        borrow_interest = total_actual_borrow * borrow_factor
+        supply_interest = total_actual_supply * supply_factor
+
         # Update indices (these grow monotonically)
         self.borrow_index *= (1 + borrow_factor)
         self.supply_index *= (1 + supply_factor)
 
-        # Treasury: reserve_rate portion of total borrow interest (in underlying units)
-        total_actual_borrow = self.total_scaled_borrow * self.borrow_index
-        total_actual_supply = self.total_scaled_supply * self.supply_index
-        borrow_interest = total_actual_borrow * borrow_factor
-        supply_interest = total_actual_supply * supply_factor
+        # Treasury receives the difference between what borrowers pay and what suppliers receive
         self.treasury += borrow_interest - supply_interest
 
     # TODO: Review entire liquidate function to ensure it works as intended
@@ -640,16 +647,12 @@ class LendingPool:
         self._transfer_from_pool(liquidator, repay_amount)
         # Burn scaled vTokens
         scaled_repay = repay_amount / self.borrow_index
-        borrower.balances[self.v_token] = (
-            self._get_scaled_borrow_balance(borrower) - scaled_repay
-        )
+        self.v_token.burn(borrower, scaled_repay)
         self.total_scaled_borrow -= scaled_repay
 
         # Execute liquidation: burn borrower's scaled aTokens, send underlying to liquidator
         scaled_collateral = actual_collateral_seized / collateral_pool.supply_index
-        borrower.balances[collateral_pool.a_token] = (
-            collateral_pool._get_scaled_supply_balance(borrower) - scaled_collateral
-        )
+        collateral_pool.a_token.burn(borrower, scaled_collateral)
         collateral_pool.total_scaled_supply -= scaled_collateral
         collateral_pool._transfer_from_pool(liquidator, actual_collateral_seized)
 
