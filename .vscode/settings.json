@@ -13,7 +13,5 @@
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter"
     },
-    "python.linting.enabled": true,
-    "python.linting.ruffEnabled": true,
-    "python.linting.ruffPath": "uv run ruff"
+    "ruff.path": ["uv", "run", "ruff"]
 }
