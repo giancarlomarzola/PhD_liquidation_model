@@ -65,13 +65,16 @@ class Agent:
             for token, amount in initial_endowment:
                 token.mint(self.wallet, amount)
 
-
-
-    def execute_deposits_withdrawals(self):
-        # use strategy to determine if any transactions need to be done and in what order
-        # e.g. max interest strategy probably wants to always withdraw from one pool and deposit in other
+    def _strategy_transaction_amount(self):
+        # use strategy and environment properties to determine transactions the Agent executes
         pass
 
+    def enact_strategy(self):
+        # first determine strategy dictated amounts and pools
+        # Also any additional/manual transaction amounts
+        # Then carry out transactions
+        self.wallet.supply() # etc.
+        pass
 
     def record_state(self) -> dict:
         # Record current state for analysis.
