@@ -644,7 +644,7 @@ class LendingPool:
         )
 
         # Execute liquidation: liquidator repays borrower's debt
-        self._transfer_from_pool(liquidator, repay_amount)
+        self._transfer_from_wallet(liquidator, repay_amount)
         # Burn scaled vTokens
         scaled_repay = repay_amount / self.borrow_index
         self.v_token.burn(borrower, scaled_repay)
