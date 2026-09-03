@@ -174,33 +174,23 @@ class Wallet:
 
     @property
     def health_factor(self) -> float:
-        """
-        Aave-style health factor using total_collateral_usd and total_borrowed_usd.
-        HF = (Total Collateral Value * Weighted Average Liquidation Threshold) / Total Borrow Value
-        """
-        total_collateral = self.total_collateral_usd
         total_borrowed = self.total_borrowed_usd
-
         if total_borrowed == 0:
             return float("inf")
 
-        # Compute weighted average liquidation threshold
+        total_collateral = 0.0
         weighted_liquidation_threshold_sum = 0.0
         for token, amount in self.balances.items():
             if isinstance(token, aToken):
                 pool = token.pool
                 actual_amount = amount * pool.supply_index
-                collateral_value = actual_amount * pool.underlying_token.price * pool.max_ltv
-                weighted_liquidation_threshold_sum += (
-                    collateral_value * pool.liquidation_threshold
-                )
+                collateral_value = actual_amount * pool.underlying_token.price  # no max_ltv
+                total_collateral += collateral_value
+                weighted_liquidation_threshold_sum += collateral_value * pool.liquidation_threshold
 
         weighted_avg_liquidation_threshold = (
-            weighted_liquidation_threshold_sum / total_collateral
-            if total_collateral > 0
-            else 0
+            weighted_liquidation_threshold_sum / total_collateral if total_collateral > 0 else 0
         )
-
         return (total_collateral * weighted_avg_liquidation_threshold) / total_borrowed
 
     def health_factor_after(
@@ -220,7 +210,7 @@ class Wallet:
         total_borrowed = 0.0
         weighted_liq_threshold_sum = 0.0
 
-        # Evaluate collateral positions
+        # Evaluate existing collateral positions
         for token, amount in self.balances.items():
             if isinstance(token, aToken):
                 pool = token.pool
@@ -228,20 +218,24 @@ class Wallet:
                 delta = collateral_change.get(token, 0.0)
                 new_actual_amount = actual_amount + delta
 
-                collateral_value = (
-                    new_actual_amount * pool.underlying_token.price * pool.max_ltv
-                )
+                collateral_value = new_actual_amount * pool.underlying_token.price
 
                 total_collateral += collateral_value
-                weighted_liq_threshold_sum += (
-                    collateral_value * pool.liquidation_threshold
-                )
+                weighted_liq_threshold_sum += collateral_value * pool.liquidation_threshold
 
             elif isinstance(token, vToken):
                 pool = token.pool
                 actual_amount = amount * pool.borrow_index
                 delta = debt_change.get(token, 0.0)
                 total_borrowed += (actual_amount + delta) * pool.underlying_token.price
+
+        # Handle new collateral positions not yet in balances
+        for token, delta in collateral_change.items():
+            if token not in self.balances:
+                pool = token.pool
+                collateral_value = delta * pool.underlying_token.price
+                total_collateral += collateral_value
+                weighted_liq_threshold_sum += collateral_value * pool.liquidation_threshold
 
         # Handle new debt positions not yet in balances
         for token, delta in debt_change.items():
@@ -629,7 +623,7 @@ class LendingPool:
         repay_usd = repay_amount * self.underlying_token.price
         collateral_price = collateral_pool.underlying_token.price
         collateral_to_seize = (
-            repay_usd * (1 + self.liquidation_bonus) / collateral_price
+            repay_usd * (1 + collateral_pool.liquidation_bonus) / collateral_price
         )
 
         # Cap at borrower's actual collateral balance
