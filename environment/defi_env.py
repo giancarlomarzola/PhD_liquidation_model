@@ -169,8 +169,37 @@ class Wallet:
         return total
 
     @property
+    def total_collateral_usd_raw(self) -> float:
+        """Unweighted collateral value (no max_ltv) -- used for bad-debt checks, not borrowing power."""
+        total = 0.0
+        for token, amount in self.balances.items():
+            if isinstance(token, aToken):
+                pool = token.pool
+                total += amount * pool.supply_index * pool.underlying_token.price
+        return total
+
+    @property
     def available_collateral_usd(self):
         return self.total_collateral_usd - self.total_borrowed_usd
+
+    def realize_bad_debt(self, dust_threshold_usd: float = 1e-6):
+        """
+        If this wallet's collateral is fully exhausted but debt remains, the debt is
+        uncollectable: write it off (burn vTokens) and register it as bad debt in
+        each affected pool.
+        """
+        if self.total_collateral_usd_raw > dust_threshold_usd:
+            return  # still has collateral to be liquidated against -- not bad debt yet
+
+        for token, amount in list(self.balances.items()):
+            if isinstance(token, vToken) and amount > 0:
+                pool = token.pool
+                actual_debt = pool.get_actual_borrow_balance(self)
+                if actual_debt <= 0:
+                    continue
+                pool.v_token.burn(self, amount)
+                pool.total_scaled_borrow -= amount
+                pool.bad_debt += actual_debt
 
     @property
     def health_factor(self) -> float:
@@ -178,18 +207,20 @@ class Wallet:
         if total_borrowed == 0:
             return float("inf")
 
-        total_collateral = 0.0
-        weighted_liquidation_threshold_sum = 0.0
-        for token, amount in self.balances.items():
-            if isinstance(token, aToken):
-                pool = token.pool
-                actual_amount = amount * pool.supply_index
-                collateral_value = actual_amount * pool.underlying_token.price  # no max_ltv
-                total_collateral += collateral_value
-                weighted_liquidation_threshold_sum += collateral_value * pool.liquidation_threshold
+        total_collateral = self.total_collateral_usd_raw
+        if total_collateral == 0:
+            return 0.0  # debt with no collateral backing it
 
+        weighted_liquidation_threshold_sum = sum(
+            amount
+            * token.pool.supply_index
+            * token.pool.underlying_token.price
+            * token.pool.liquidation_threshold
+            for token, amount in self.balances.items()
+            if isinstance(token, aToken)
+        )
         weighted_avg_liquidation_threshold = (
-            weighted_liquidation_threshold_sum / total_collateral if total_collateral > 0 else 0
+            weighted_liquidation_threshold_sum / total_collateral
         )
         return (total_collateral * weighted_avg_liquidation_threshold) / total_borrowed
 
@@ -246,9 +277,10 @@ class Wallet:
         if total_borrowed == 0:
             return float("inf")
 
-        weighted_avg_liq_threshold = (
-            weighted_liq_threshold_sum / total_collateral if total_collateral > 0 else 0
-        )
+        if total_collateral == 0:
+            return 0.0  # debt with no collateral backing it
+
+        weighted_avg_liq_threshold = weighted_liq_threshold_sum / total_collateral
 
         return (total_collateral * weighted_avg_liq_threshold) / total_borrowed
 
@@ -619,55 +651,66 @@ class LendingPool:
             f"{self.underlying_token.symbol} (need {repay_amount:.4f})"
         )
 
-        # Calculate collateral to seize (repay USD value + liquidation bonus)
-        repay_usd = repay_amount * self.underlying_token.price
+        # Cap repay_amount so it never exceeds what collateral can back (Aave-style).
+        # A single liquidation call never realizes bad debt: it liquidates as much as the
+        # collateral in this pool supports and stops.
         collateral_price = collateral_pool.underlying_token.price
-        collateral_to_seize = (
-            repay_usd * (1 + collateral_pool.liquidation_bonus) / collateral_price
-        )
-
-        # Cap at borrower's actual collateral balance
         borrower_actual_collateral = collateral_pool.get_actual_supply_balance(borrower)
-        actual_collateral_seized = min(collateral_to_seize, borrower_actual_collateral)
-
-        # Check pool has available cash to pay out collateral as underlying
-        assert collateral_pool.available_liquidity_cash >= actual_collateral_seized, (
-            f"Collateral pool has insufficient cash "
-            f"({collateral_pool.available_liquidity_cash:.4f}) "
-            f"to pay out {actual_collateral_seized:.4f}"
+        max_repay_from_collateral = (
+            borrower_actual_collateral
+            * collateral_price
+            / (1 + collateral_pool.liquidation_bonus)
+            / self.underlying_token.price
         )
+        repay_amount = min(repay_amount, max_repay_from_collateral)
 
-        # Execute liquidation: liquidator repays borrower's debt
-        self._transfer_from_wallet(liquidator, repay_amount)
-        # Burn scaled vTokens
-        scaled_repay = repay_amount / self.borrow_index
-        self.v_token.burn(borrower, scaled_repay)
-        self.total_scaled_borrow -= scaled_repay
+        if repay_amount > 0:
+            # Calculate collateral to seize (repay USD value + liquidation bonus)
+            repay_usd = repay_amount * self.underlying_token.price
+            collateral_to_seize = (
+                repay_usd * (1 + collateral_pool.liquidation_bonus) / collateral_price
+            )
+            actual_collateral_seized = min(collateral_to_seize, borrower_actual_collateral)
 
-        # Execute liquidation: burn borrower's scaled aTokens, send underlying to liquidator
-        scaled_collateral = actual_collateral_seized / collateral_pool.supply_index
-        collateral_pool.a_token.burn(borrower, scaled_collateral)
-        collateral_pool.total_scaled_supply -= scaled_collateral
-        collateral_pool._transfer_from_pool(liquidator, actual_collateral_seized)
+            # Check pool has available cash to pay out collateral as underlying
+            assert collateral_pool.available_liquidity_cash >= actual_collateral_seized, (
+                f"Collateral pool has insufficient cash "
+                f"({collateral_pool.available_liquidity_cash:.4f}) "
+                f"to pay out {actual_collateral_seized:.4f}"
+            )
 
-        # Account any resulting bad debt (collateral insufficient to cover full bonus)
-        if actual_collateral_seized < collateral_to_seize:
-            shortfall_usd = (
-                collateral_to_seize - actual_collateral_seized
-            ) * collateral_price
-            self.bad_debt += shortfall_usd / self.underlying_token.price
+            # Execute liquidation: liquidator repays borrower's debt
+            self._transfer_from_wallet(liquidator, repay_amount)
+            # Burn scaled vTokens
+            scaled_repay = repay_amount / self.borrow_index
+            self.v_token.burn(borrower, scaled_repay)
+            self.total_scaled_borrow -= scaled_repay
+
+            # Execute liquidation: burn borrower's scaled aTokens, send underlying to liquidator
+            scaled_collateral = actual_collateral_seized / collateral_pool.supply_index
+            collateral_pool.a_token.burn(borrower, scaled_collateral)
+            collateral_pool.total_scaled_supply -= scaled_collateral
+            collateral_pool._transfer_from_pool(liquidator, actual_collateral_seized)
+
+        # Realize bad debt at the wallet level, once collateral is truly gone across all pools
+        borrower.realize_bad_debt()
 
 
 # ========================================================================================================================
-# Liquidation example with interest accrual
+# Liquidation example with interest accrual and bad-debt realization
 # Market with 2 tokens (USDC, WBTC)
 #
 # Scenario:
 #   - Alice is a USDC liquidity provider and liquidator
-#   - Bob supplies WBTC as collateral and borrows USDC
-#   - 1 year passes, interest accrues
-#   - WBTC price crashes, pushing Bob's health factor below 1
-#   - Alice liquidates Bob: repays half of Bob's debt and seizes WBTC collateral at a bonus
+#   - Bob supplies WBTC as collateral and borrows USDC near his LTV limit
+#   - 1 year passes, interest accrues (Bob's debt grows)
+#   - WBTC price crashes hard ($50,000 --> $28,000), pushing Bob deeply underwater:
+#     his collateral is now worth less than his debt
+#   - Alice liquidates Bob repeatedly (closing factor caps each call to 50% of debt).
+#     Each call only repays as much debt as the seized WBTC + bonus can back, so no
+#     single call creates bad debt.
+#   - Once Bob's WBTC is fully drained while USDC debt remains, realize_bad_debt()
+#     writes the uncollectable remainder off to usdc_pool.bad_debt
 # ========================================================================================================================
 if __name__ == "__main__":
 
@@ -694,10 +737,10 @@ if __name__ == "__main__":
     )
 
     # Alice: USDC liquidity provider and liquidator
-    #   - supplies 75,000 USDC to pool (so Bob can borrow)
-    #   - keeps 25,000 USDC in wallet for liquidation
+    #   - supplies 80,000 USDC to pool (so Bob can borrow)
+    #   - keeps 70,000 USDC in wallet to fund repeated liquidations
     Alice = Wallet(defi_env, "alice", is_liquidator=True)
-    usdc.mint(Alice, 100_000)
+    usdc.mint(Alice, 150_000)
 
     # Bob: WBTC holder who uses it as collateral to borrow USDC
     Bob = Wallet(defi_env, "bob")
@@ -708,15 +751,16 @@ if __name__ == "__main__":
 
     print(
         3 * "\n"
-        + f"{'='*50}\nAlice supplies 75,000 USDC; Bob supplies 2 WBTC\n{'='*50}\n"
+        + f"{'='*50}\nAlice supplies 80,000 USDC; Bob supplies 2 WBTC\n{'='*50}\n"
     )
-    Alice.supply(usdc_pool, 75_000)
+    Alice.supply(usdc_pool, 80_000)
     Bob.supply(wbtc_pool, 2)
     print_current_state()
 
-    # Bob borrows 50,000 USDC (HF = 2 * 50,000 * 0.73 * 0.78 / 50,000 = 1.14)
-    print(3 * "\n" + f"{'='*50}\nBob borrows 50,000 USDC  |  HF = 1.14\n{'='*50}\n")
-    Bob.borrow(usdc_pool, 50_000)
+    # Bob borrows 70,000 USDC against 2 WBTC = $100,000  (near his 73% LTV limit)
+    #   HF = 100,000 * 0.78 / 70,000 = 1.114
+    print(3 * "\n" + f"{'='*50}\nBob borrows 70,000 USDC  |  HF = 1.11\n{'='*50}\n")
+    Bob.borrow(usdc_pool, 70_000)
     print_current_state()
 
     # Advance 1 year: interest accrues on supplies and borrows
@@ -728,23 +772,41 @@ if __name__ == "__main__":
     defi_env.advance_blocks(blocks_per_year)
     print_current_state()
 
-    # WBTC crashes: HF = 2 * 40,000 * 0.73 * 0.78 / (50,000 * accrued_interest) ≈ undercollateralised
+    # WBTC crashes hard: 2 WBTC now worth ~$56,000, far below Bob's ~$74,000 debt
     print(
         3 * "\n"
-        + f"{'='*50}\nWBTC price crashes: $50,000 --> $40,000  |  Bob becomes undercollateralised\n{'='*50}\n"
+        + f"{'='*50}\nWBTC price crashes: $50,000 --> $28,000  |  Bob is deeply underwater\n{'='*50}\n"
     )
-    defi_env.prices["wbtc"] = 40_000.00
+    defi_env.prices["wbtc"] = 28_000.00
     print_current_state()
 
-    # Alice liquidates Bob
-    #   Repay amount is capped to closing_factor of Bob's debt, but also to Alice's available balance
+    # Alice liquidates Bob repeatedly.
+    #   Each call repays at most closing_factor (50%) of Bob's remaining debt, and never
+    #   more than the seized WBTC + bonus can back. Once Bob's WBTC is gone and USDC debt
+    #   remains, realize_bad_debt() writes the remainder off to usdc_pool.bad_debt.
     print(
         3 * "\n"
-        + f"{'='*50}\nAlice liquidates Bob\n{'='*50}\n"
+        + f"{'='*50}\nAlice liquidates Bob (repeated calls until debt is cleared)\n{'='*50}\n"
     )
-    actual_bob_debt = usdc_pool.get_actual_borrow_balance(Bob)
-    max_repay_by_closing_factor = actual_bob_debt * usdc_pool.closing_factor
-    alice_available = Alice.balances.get(usdc, 0.0)
-    repay_amount = min(max_repay_by_closing_factor, alice_available)
-    Alice.liquidate(usdc_pool, Bob, repay_amount, collateral_pool=wbtc_pool)
+    liquidation_round = 0
+    while True:
+        actual_bob_debt = usdc_pool.get_actual_borrow_balance(Bob)
+        if actual_bob_debt <= 1e-6:
+            break
+        alice_available = Alice.balances.get(usdc, 0.0)
+        repay_amount = min(actual_bob_debt * usdc_pool.closing_factor, alice_available)
+        if repay_amount <= 0:
+            print("Alice is out of USDC -- cannot continue liquidating\n")
+            break
+        liquidation_round += 1
+        print(
+            f"Round {liquidation_round}: Bob debt = {actual_bob_debt:,.2f} USDC, "
+            f"Bob WBTC collateral = {wbtc_pool.get_actual_supply_balance(Bob):,.4f}, "
+            f"repay = {repay_amount:,.2f} USDC"
+        )
+        Alice.liquidate(usdc_pool, Bob, repay_amount, collateral_pool=wbtc_pool)
+
+    print(
+        f"\nBad debt realized in USDC pool: {usdc_pool.bad_debt:,.2f} USDC\n"
+    )
     print_current_state()
