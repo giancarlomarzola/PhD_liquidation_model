@@ -17,7 +17,7 @@ def env_setup():
         - Wallets:
             alice:      200,000 USDC        (USDC liquidity provider)
             bob:        2 WBTC              (borrower, WBTC collateral)
-            liquidator: 200,000 USDC        (flagged is_liquidator)
+            liquidator: 200,000 USDC        
     """
     env = DefiEnv(prices={"USDC": 1.0, "WBTC": 50_000.0})
 
@@ -29,7 +29,7 @@ def env_setup():
 
     alice = Wallet(env, "alice")
     bob = Wallet(env, "bob")
-    liquidator = Wallet(env, "liquidator", is_liquidator=True)
+    liquidator = Wallet(env, "liquidator")
 
     usdc.mint(alice, 200_000)
     wbtc.mint(bob, 2)
@@ -139,7 +139,7 @@ def test_liquidate_insufficient_liquidator_funds_rejected(env_setup):
     open_bob_position(env_setup, borrow_usdc=70_000)
     env.prices["WBTC"] = 42_000.0
 
-    poor = Wallet(env, "poor", is_liquidator=True)
+    poor = Wallet(env, "poor")
     usdc.mint(poor, 1_000)
 
     with pytest.raises(AssertionError, match="has insufficient"):
