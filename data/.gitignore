@@ -1,3 +1,3 @@
-# Ignore contents of data folder, while keeping folder present
+# Ignore contents of data folder, while keeping folder present in repo
 *
 !.gitignore
