@@ -1,6 +1,5 @@
 **/**/.DS_Store
-data/*
-!data/.keep
+.claude
 .venv/
 *.pdf
 __pycache__
