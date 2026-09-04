@@ -99,7 +99,10 @@ class DefiEnv:
         
         # Update prices if provided
         if new_prices:
-            self.prices.update(new_prices)
+            self.prices = new_prices
+
+        #TODO: recalculate positions and health factors?
+        # use get_liquidation_candidates function - maybe move that function to DefiEnv instead of Wallet
 
 
 class Wallet:
