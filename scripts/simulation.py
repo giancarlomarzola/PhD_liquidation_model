@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from environment.defi_env import DefiEnv, Wallet, Token, aToken, vToken, LendingPool
+from environment.defi_env import DefiEnv, Wallet, Token, aToken, vToken, LendingPool  # noqa: F401
 from environment.parameters import pool_parameters
 
 
@@ -131,7 +131,7 @@ if __name__ == "__main__":
     )
 
     # Withdraws when price increases and deposits when price decreases
-    gambler = DepositWithdrawalStrategy(
+    contrarian = DepositWithdrawalStrategy(
         withdrawal_trigger="price",
         withdrawal_trigger_threshold=0.02,
         withdrawal_rate=0.1,
@@ -146,13 +146,13 @@ if __name__ == "__main__":
 
 
     # 3: create agents with different strategies
-    num_gambler_agents = 100
-    for i in num_gambler_agents:
+    num_contrarian_agents = 100
+    for i in num_contrarian_agents:
         simulation.agents.append(
             Agent(
-                name=f"gambler_{i}",
+                name=f"contrarian{i}",
                 defi_env=defi_env,
-                strategy=gambler,
+                strategy=contrarian,
                 liquidator_strategy=None,
                 wallet=None,
                 initial_endowment={wbtc:1, usdc:20_000} # maybe randomize a bit
