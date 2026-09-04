@@ -33,8 +33,9 @@ class DepositWithdrawalStrategy:
 class LiquidatorStrategy:
     """Configuration for liquidator behavior."""
     target_health_factor: float = 0.99  # liquidate when HF drops below this
-    max_repay_fraction: float = 0.5  # repay up to this % of debt per liquidation
+    max_repay_fraction: float = 0.5  # repay up to this % of debt per liquidation (will never exceed pool's closing factor)
     prioritize_by: str = "profit"  # "profit" or "health_factor"
+    # TODO: Add collateral choice strategy
 
 
 
