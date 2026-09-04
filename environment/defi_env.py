@@ -108,7 +108,6 @@ class Wallet:
         env: DefiEnv,
         name: str,
         balances: dict[Token, float] | None = None,
-        is_liquidator: bool = False,
     ):
         # Add Wallet to defi environment
         assert name not in env.wallets, f"User {name} exists"
@@ -116,7 +115,6 @@ class Wallet:
         self.env.wallets[name] = self
         self.balances = balances or {}
         self.name = name
-        self.is_liquidator = is_liquidator
 
     def __str__(self) -> str:
         indent = "    "
@@ -132,7 +130,6 @@ class Wallet:
         return (
             f"{self.name} Wallet\n"
             f"{'-'*50}\n"
-            f"{indent}Liquidator: {self.is_liquidator}\n"
             f"{indent}Balances:\n"
             f"{balances_str}\n"
             f"{indent}Health Factor: {self.health_factor:.4f}\n"
@@ -739,7 +736,7 @@ if __name__ == "__main__":
     # Alice: USDC liquidity provider and liquidator
     #   - supplies 80,000 USDC to pool (so Bob can borrow)
     #   - keeps 70,000 USDC in wallet to fund repeated liquidations
-    Alice = Wallet(defi_env, "alice", is_liquidator=True)
+    Alice = Wallet(defi_env, "alice")
     usdc.mint(Alice, 150_000)
 
     # Bob: WBTC holder who uses it as collateral to borrow USDC
