@@ -91,6 +91,7 @@ class DefiEnv:
         
         Interest rates are recalculated automatically as part of accrue_interest().
         """
+        # Increment blocknumber
         self.blocknumber += num_blocks
         
         # Accrue interest on all pools (which recalculates interest rates internally)
@@ -624,7 +625,6 @@ class LendingPool:
         # Treasury receives the difference between what borrowers pay and what suppliers receive
         self.treasury += borrow_interest - supply_interest
 
-    # TODO: Review entire liquidate function to ensure it works as intended
     def liquidate(
         self,
         liquidator: Wallet,
