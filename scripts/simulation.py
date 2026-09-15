@@ -4,20 +4,6 @@ from environment.defi_env import DefiEnv, Wallet, Token, aToken, vToken, Lending
 from environment.parameters import pool_parameters
 
 
-class Simulation:
-    def __init__(
-        self,
-        environment: DefiEnv,
-        agents: list[Agent]
-        # other parameters? e.g.
-        # Agent strategies and amounts
-        # Simulation duration
-
-    ):
-        self.environment = environment
-        self.agents = agents
-
-
 @dataclass
 class DepositWithdrawalStrategy:
     """Configuration for agent deposit and withdrawal behavior."""
@@ -27,6 +13,36 @@ class DepositWithdrawalStrategy:
     deposit_trigger: str = "price"  # "price_change", "health_factor", "time"
     deposit_trigger_threshold: float = 0.10
     deposit_rate: float = 0.05
+
+# Preset strategies
+interest_seeker = DepositWithdrawalStrategy(
+    # Need to find a way to make them find pools with highest interest
+    # maybe something like "interest" trigger where withdrawals and depositis are 
+    # triggered by difference between current pools and best pools
+    withdrawal_trigger="interest",
+    withdrawal_trigger_threshold=0.1,
+)
+
+# deposits periodically and withdraws heavily in a crash
+panic_withdrawer = DepositWithdrawalStrategy(
+    withdrawal_trigger="health_factor",
+    withdrawal_trigger_threshold=0.15,
+    withdrawal_rate=0.4,
+    deposit_trigger="time",
+    deposit_trigger_threshold=50, # should then be deposit every 50 blocks
+    deposit_rate=0.1,
+)
+
+# Withdraws when price increases and deposits when price decreases
+contrarian = DepositWithdrawalStrategy(
+    withdrawal_trigger="price",
+    withdrawal_trigger_threshold=0.02,
+    withdrawal_rate=0.1,
+    deposit_trigger="price",
+    deposit_trigger_threshold=-0.02,
+    deposit_rate=0.1,
+)
+
 
 
 @dataclass
@@ -92,6 +108,19 @@ class Agent:
 
 
 
+class Simulation:
+    def __init__(
+        self,
+        environment: DefiEnv,
+        agents: list[Agent]
+        # other parameters? e.g.
+        # Agent strategies and amounts
+        # Simulation duration
+
+    ):
+        self.environment = environment
+        self.agents = agents
+
 
 
 if __name__ == "__main__":
@@ -107,38 +136,6 @@ if __name__ == "__main__":
     )
     wbtc_pool = LendingPool(
         env=defi_env, underlying_token=wbtc, **pool_parameters["wbtc"]
-    )
-
-    # 2: define strategies
-    # placeholder strategies
-
-    interest_seeker = DepositWithdrawalStrategy(
-        # Need to find a way to make them find pools with highest interest
-        # maybe something like "interest" trigger where withdrawals and depositis are 
-        # triggered by difference between current pools and best pools
-        withdrawal_trigger="interest",
-        withdrawal_trigger_threshold=0.1,
-
-    )
-
-    # deposits periodically and withdraws heavily in a crash
-    panic_withdrawer = DepositWithdrawalStrategy(
-        withdrawal_trigger="health_factor",
-        withdrawal_trigger_threshold=0.15,
-        withdrawal_rate=0.4,
-        deposit_trigger="time",
-        deposit_trigger_threshold=50, # should then be deposit every 50 blocks
-        deposit_rate=0.1,
-    )
-
-    # Withdraws when price increases and deposits when price decreases
-    contrarian = DepositWithdrawalStrategy(
-        withdrawal_trigger="price",
-        withdrawal_trigger_threshold=0.02,
-        withdrawal_rate=0.1,
-        deposit_trigger="price",
-        deposit_trigger_threshold=-0.02,
-        deposit_rate=0.1,
     )
 
 
