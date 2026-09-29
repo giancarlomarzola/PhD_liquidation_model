@@ -180,6 +180,18 @@ class Wallet:
         return total
 
     @property
+    def weighted_collateral_usd(self) -> float:
+        """Collateral value weighted by each pool's liquidation threshold (numerator of the health factor)."""
+        total = 0.0
+        for token, amount in self.balances.items():
+            if isinstance(token, aToken):
+                pool = token.pool
+                total += (
+                    amount * pool.supply_index * pool.underlying_token.price * pool.liquidation_threshold
+                )
+        return total
+
+    @property
     def available_collateral_usd(self):
         return self.total_collateral_usd - self.total_borrowed_usd
 
@@ -208,22 +220,10 @@ class Wallet:
         if total_borrowed == 0:
             return float("inf")
 
-        total_collateral = self.total_collateral_usd_raw
-        if total_collateral == 0:
+        if self.total_collateral_usd_raw == 0:
             return 0.0  # debt with no collateral backing it
 
-        weighted_liquidation_threshold_sum = sum(
-            amount
-            * token.pool.supply_index
-            * token.pool.underlying_token.price
-            * token.pool.liquidation_threshold
-            for token, amount in self.balances.items()
-            if isinstance(token, aToken)
-        )
-        weighted_avg_liquidation_threshold = (
-            weighted_liquidation_threshold_sum / total_collateral
-        )
-        return (total_collateral * weighted_avg_liquidation_threshold) / total_borrowed
+        return self.weighted_collateral_usd / total_borrowed
 
     def health_factor_after(
         self,
@@ -434,8 +434,8 @@ class LendingPool:
 
     def __str__(self) -> str:
         indent = "    "  # 4 spaces
-        total_actual_supply = self.total_scaled_supply * self.supply_index
-        total_actual_borrow = self.total_scaled_borrow * self.borrow_index
+        total_actual_supply = self.total_actual_supply
+        total_actual_borrow = self.total_actual_borrow
         return (
             f"{self.underlying_token.symbol.upper()} LENDING POOL "
             f"(block {self.env.blocknumber})\n"
@@ -459,8 +459,30 @@ class LendingPool:
         )
 
     @property
+    def total_actual_supply(self) -> float:
+        return self.total_scaled_supply * self.supply_index
+
+    @property
+    def total_actual_borrow(self) -> float:
+        return self.total_scaled_borrow * self.borrow_index
+
+    @property
+    def supply_room(self) -> float:
+        """Amount that can still be supplied before hitting the supply cap."""
+        if not self.supply_cap:
+            return float("inf")
+        return max(0.0, self.supply_cap - self.total_actual_supply)
+
+    @property
+    def borrow_room(self) -> float:
+        """Amount that can still be borrowed before hitting the borrow cap."""
+        if not self.borrow_cap:
+            return float("inf")
+        return max(0.0, self.borrow_cap - self.total_actual_borrow)
+
+    @property
     def usage_ratio(self):
-        total_debt = self.total_scaled_borrow * self.borrow_index
+        total_debt = self.total_actual_borrow
         total_liquidity = self.available_liquidity_cash + total_debt
 
         if total_liquidity == 0:
@@ -505,11 +527,7 @@ class LendingPool:
         )
 
     def supply(self, wallet: Wallet, amount: float):
-        if self.supply_cap:
-            total_actual_supply = self.total_scaled_supply * self.supply_index
-            assert (
-                total_actual_supply + amount
-            ) <= self.supply_cap, "Transaction exceeds pool's supply cap"
+        assert amount <= self.supply_room, "Transaction exceeds pool's supply cap"
         self._transfer_from_wallet(wallet, amount)
         # Mint scaled aTokens: scaled_amount = amount / supply_index
         scaled_amount = amount / self.supply_index
@@ -534,11 +552,7 @@ class LendingPool:
 
     def borrow(self, wallet: Wallet, amount: float):
         assert amount > 0, "Amount must be positive"
-        if self.borrow_cap:
-            total_actual_borrow = self.total_scaled_borrow * self.borrow_index
-            assert (
-                total_actual_borrow + amount
-            ) <= self.borrow_cap, "Transaction exceeds pool's borrow cap"
+        assert amount <= self.borrow_room, "Transaction exceeds pool's borrow cap"
         hf_after = wallet.health_factor_after(debt_change={self.v_token: amount})
         assert (  # Check HF
             hf_after > 1
