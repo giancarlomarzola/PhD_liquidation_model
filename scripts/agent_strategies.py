@@ -3,8 +3,8 @@ import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from environment.defi_env import DefiEnv, Wallet, Token, aToken, vToken, LendingPool  # noqa: F401
-from environment.parameters import pool_parameters  # noqa: F401
+from environment.defi_env import DefiEnv, Wallet, Token, LendingPool
+from environment.parameters import pool_parameters
 
 
 # ========================================================================================================================
@@ -17,7 +17,7 @@ class ActionType(Enum):
     WITHDRAW = "withdraw"
     BORROW = "borrow"
     REPAY = "repay"
-    TRANSFER = "transfer"  # withdraw from `pool`, swap at oracle price, supply to `to_pool`
+    TRANSFER = "transfer"  # withdraw from `pool`, swap at oracle price, supply to `target_pool`
 
 
 @dataclass(frozen=True)
@@ -30,10 +30,10 @@ class Action:
     kind: ActionType
     pool: LendingPool
     amount: float
-    to_pool: LendingPool | None = None
+    target_pool: LendingPool | None = None
 
     def __repr__(self) -> str:
-        target = f" -> {self.to_pool.underlying_token.symbol}" if self.to_pool else ""
+        target = f" -> {self.target_pool.underlying_token.symbol}" if self.target_pool else ""
         return (
             f"Action({self.kind.value} {self.amount:,.6f} "
             f"{self.pool.underlying_token.symbol}{target})"
@@ -44,7 +44,30 @@ class Action:
             "kind": self.kind.value,
             "pool": self.pool.underlying_token.symbol,
             "amount": self.amount,
-            "to_pool": self.to_pool.underlying_token.symbol if self.to_pool else None,
+            "target_pool": self.target_pool.underlying_token.symbol if self.target_pool else None,
+        }
+
+
+@dataclass(frozen=True)
+class Transaction:
+    """An attempted Action and its outcome, as logged by the Agent."""
+
+    block: int
+    action: Action
+    error: str | None = None
+    received: float | None = None  # TRANSFER only: amount of `target_pool`'s token supplied
+
+    @property
+    def success(self) -> bool:
+        return self.error is None
+
+    def to_dict(self) -> dict:
+        return {
+            "block": self.block,
+            **self.action.to_dict(),
+            "received": self.received,
+            "success": self.success,
+            "error": self.error,
         }
 
 
@@ -163,13 +186,13 @@ class Strategy(ABC):
         agent: Agent,
         kind: ActionType,
         pool: LendingPool,
-        to_pool: LendingPool | None = None,
+        target_pool: LendingPool | None = None,
     ) -> float:
         """Largest amount (in `pool` underlying units) of `kind` the agent can currently transact."""
         wallet = agent.wallet
 
         if kind is ActionType.SUPPLY:
-            return min(wallet.balances.get(pool.underlying_token, 0.0), _supply_room(pool))
+            return min(wallet.balances.get(pool.underlying_token, 0.0), pool.supply_room)
 
         if kind is ActionType.REPAY:
             return min(
@@ -179,11 +202,11 @@ class Strategy(ABC):
 
         if kind is ActionType.BORROW:
             headroom_usd = (
-                _weighted_collateral_usd(wallet) / self.min_health_factor
+                wallet.weighted_collateral_usd / self.min_health_factor
                 - wallet.total_borrowed_usd
             )
             amount = headroom_usd / pool.underlying_token.price
-            return max(0.0, min(amount, pool.available_liquidity_cash, _borrow_room(pool)))
+            return max(0.0, min(amount, pool.available_liquidity_cash, pool.borrow_room))
 
         if kind in (ActionType.WITHDRAW, ActionType.TRANSFER):
             amount = min(
@@ -192,9 +215,9 @@ class Strategy(ABC):
                 self._max_safe_withdraw(wallet, pool),
             )
             if kind is ActionType.TRANSFER:
-                assert to_pool is not None and to_pool is not pool, "Transfer needs a different to_pool"
-                price_ratio = to_pool.underlying_token.price / pool.underlying_token.price
-                amount = min(amount, _supply_room(to_pool) * price_ratio)
+                assert target_pool is not None and target_pool is not pool, "Transfer needs a different target_pool"
+                price_ratio = target_pool.underlying_token.price / pool.underlying_token.price
+                amount = min(amount, target_pool.supply_room * price_ratio)
             # Tiny haircut: withdrawing the exact full balance can fail the aToken burn on float rounding
             return max(0.0, amount * (1 - 1e-12))
 
@@ -206,21 +229,21 @@ class Strategy(ABC):
         kind: ActionType,
         pool: LendingPool,
         fraction: float,
-        to_pool: LendingPool | None = None,
+        target_pool: LendingPool | None = None,
     ) -> Action | None:
         """Action for `fraction` of the max feasible amount, or None if nothing can be transacted."""
         assert 0 < fraction <= 1, "Fraction must be in (0, 1]"
-        amount = fraction * self.max_amount(agent, kind, pool, to_pool)
+        amount = fraction * self.max_amount(agent, kind, pool, target_pool)
         if amount <= 0:
             return None
-        return Action(kind, pool, amount, to_pool)
+        return Action(kind, pool, amount, target_pool)
 
     def _max_safe_withdraw(self, wallet: Wallet, pool: LendingPool) -> float:
         # HF = weighted_collateral / debt  ->  solve for withdrawal x keeping HF >= min_health_factor
         debt_usd = wallet.total_borrowed_usd
         if debt_usd == 0:
             return pool.get_actual_supply_balance(wallet)
-        excess_usd = _weighted_collateral_usd(wallet) - self.min_health_factor * debt_usd
+        excess_usd = wallet.weighted_collateral_usd - self.min_health_factor * debt_usd
         return max(0.0, excess_usd / (pool.underlying_token.price * pool.liquidation_threshold))
 
 
@@ -228,14 +251,22 @@ class Strategy(ABC):
 class Rule:
     """
     When `trigger` fires, transact `fraction` of the max feasible amount of `action`
-    in the pool of `pool` (underlying token symbol). `to_pool` is only used for TRANSFER.
+    in the pool of `pool` (underlying token symbol). `target_pool` is only used for TRANSFER.
     """
 
     trigger: Trigger
     action: ActionType
     pool: str
     fraction: float
-    to_pool: str | None = None
+    target_pool: str | None = None
+
+    def __post_init__(self):
+        assert 0 < self.fraction <= 1, "Fraction must be in (0, 1]"
+        if self.action is ActionType.TRANSFER:
+            assert self.target_pool is not None, "TRANSFER rules need a target_pool"
+            assert self.target_pool != self.pool, "target_pool must differ from pool"
+        else:
+            assert self.target_pool is None, "target_pool is only used by TRANSFER rules"
 
 
 class RuleBasedStrategy(Strategy):
@@ -260,8 +291,8 @@ class RuleBasedStrategy(Strategy):
         for rule in self.rules:
             if not rule.trigger.is_triggered(agent):
                 continue
-            to_pool = pools[rule.to_pool] if rule.to_pool else None
-            action = self.sized_action(agent, rule.action, pools[rule.pool], rule.fraction, to_pool)
+            target_pool = pools[rule.target_pool] if rule.target_pool else None
+            action = self.sized_action(agent, rule.action, pools[rule.pool], rule.fraction, target_pool)
             if action:
                 actions.append(action)
         return actions
@@ -317,9 +348,9 @@ class RandomStrategy(Strategy):
 
         kinds = list(options)
         kind = self.rng.choices(kinds, weights=[self.weights[k] for k in kinds])[0]
-        pool, to_pool = self.rng.choice(options[kind])
+        pool, target_pool = self.rng.choice(options[kind])
         fraction = self.rng.uniform(self.min_fraction, self.max_fraction)
-        action = self.sized_action(agent, kind, pool, fraction, to_pool)
+        action = self.sized_action(agent, kind, pool, fraction, target_pool)
         return [action] if action else []
 
     def _feasible_options(
@@ -331,39 +362,10 @@ class RandomStrategy(Strategy):
         else:
             candidates = [(pool, None) for pool in pools]
         return [
-            (pool, to_pool)
-            for pool, to_pool in candidates
-            if self.max_amount(agent, kind, pool, to_pool) > 0
+            (pool, target_pool)
+            for pool, target_pool in candidates
+            if self.max_amount(agent, kind, pool, target_pool) > 0
         ]
-
-
-# ========================================================================================================================
-# Helpers
-# ========================================================================================================================
-
-
-def _weighted_collateral_usd(wallet: Wallet) -> float:
-    """Sum of collateral value * liquidation threshold (numerator of the health factor)."""
-    return sum(
-        amount
-        * token.pool.supply_index
-        * token.pool.underlying_token.price
-        * token.pool.liquidation_threshold
-        for token, amount in wallet.balances.items()
-        if isinstance(token, aToken)
-    )
-
-
-def _supply_room(pool: LendingPool) -> float:
-    if not pool.supply_cap:
-        return float("inf")
-    return max(0.0, pool.supply_cap - pool.total_scaled_supply * pool.supply_index)
-
-
-def _borrow_room(pool: LendingPool) -> float:
-    if not pool.borrow_cap:
-        return float("inf")
-    return max(0.0, pool.borrow_cap - pool.total_scaled_borrow * pool.borrow_index)
 
 
 # ========================================================================================================================
@@ -373,23 +375,24 @@ def _borrow_room(pool: LendingPool) -> float:
 
 class Agent:
     """
-    Minimal agent that just holds positions and reacts to instructions.
-    Base for creating custom agent behaviors.
+    Market participant with a wallet. Each step, `enact_strategy` asks the agent's Strategy
+    for Actions and executes them, logging every attempt in `transactions`.
+    An agent without a strategy only acts on manually passed `extra_actions`.
     """
 
     def __init__(
         self,
         name: str,
         env: DefiEnv,
+        wallet: Wallet | None = None,
         strategy: Strategy | None = None,
-        wallet: Wallet = None,
         liquidator_strategy: LiquidatorStrategy | None = None,
-        initial_endowment: dict[Token, float] | None = None
+        initial_endowment: dict[Token, float] | None = None,
     ):
         self.env = env
         self.name = name
         self.history = []
-        self.transactions = []  # log of every attempted Action, with outcome
+        self.transactions: list[Transaction] = []  # every attempted Action, with outcome
         self.strategy = strategy  # None = agent never acts on its own
         self.liquidator_strategy = liquidator_strategy
 
@@ -407,32 +410,27 @@ class Agent:
         actions = self.strategy.decide(self) if self.strategy else []
         actions += extra_actions or []
         for action in actions:
-            error = None
+            #TODO: Should i shuffle the order of actions in here?
+            error, received = None, None
             try:
-                self.execute(action)
+                received = self.execute(action)
             except AssertionError as e:
                 error = str(e)
-            self.transactions.append(
-                {"block": self.env.blocknumber, **action.to_dict(), "success": error is None, "error": error}
-            )
+            self.transactions.append(Transaction(self.env.blocknumber, action, error, received))
         return actions
 
-    def execute(self, action: Action):
-        match action.kind:
-            case ActionType.SUPPLY:
-                self.wallet.supply(action.pool, action.amount)
-            case ActionType.WITHDRAW:
-                self.wallet.withdraw(action.pool, action.amount)
-            case ActionType.BORROW:
-                self.wallet.borrow(action.pool, action.amount)
-            case ActionType.REPAY:
-                self.wallet.repay(action.pool, action.amount)
-            case ActionType.TRANSFER:
-                self.wallet.withdraw(action.pool, action.amount)
-                received = self._swap(
-                    action.pool.underlying_token, action.to_pool.underlying_token, action.amount
-                )
-                self.wallet.supply(action.to_pool, received)
+    def execute(self, action: Action) -> float | None:
+        """Carry out `action`. For TRANSFER, returns the amount supplied to `target_pool`."""
+        if action.kind is not ActionType.TRANSFER:
+            # ActionType values match the Wallet method names (supply, withdraw, borrow, repay)
+            getattr(self.wallet, action.kind.value)(action.pool, action.amount)
+            return None
+        self.wallet.withdraw(action.pool, action.amount)
+        received = self._swap(
+            action.pool.underlying_token, action.target_pool.underlying_token, action.amount
+        )
+        self.wallet.supply(action.target_pool, received)
+        return received
 
     def _swap(self, sell: Token, buy: Token, amount: float) -> float:
         """Idealised swap at oracle prices (no DEX, no slippage or fees)."""
@@ -452,3 +450,119 @@ class Agent:
         }
         self.history.append(state)
         return state
+
+
+if __name__ == "__main__":
+    # 1: set up market env with tokens and pools
+    defi_env = DefiEnv(prices={"usdc": 1.00, "wbtc": 50_000.00})
+
+    usdc = Token(defi_env, "usdc")
+    wbtc = Token(defi_env, "wbtc")
+
+    usdc_pool = LendingPool(env=defi_env, underlying_token=usdc, **pool_parameters["usdc"])
+    wbtc_pool = LendingPool(env=defi_env, underlying_token=wbtc, **pool_parameters["wbtc"])
+
+    # 2: define strategies
+    # Contrarian: withdraws wbtc into price rises, supplies into price drops
+    contrarian = RuleBasedStrategy(
+        [
+            Rule(PriceChangeTrigger("wbtc", +0.02), ActionType.WITHDRAW, "wbtc", fraction=0.1),
+            Rule(PriceChangeTrigger("wbtc", -0.02), ActionType.SUPPLY, "wbtc", fraction=0.1),
+        ]
+    )
+
+    # Panic withdrawer: supplies periodically, pulls out when the market crashes
+    panic_withdrawer = RuleBasedStrategy(
+        [
+            Rule(BlockIntervalTrigger(every=50), ActionType.SUPPLY, "wbtc", fraction=0.2),
+            Rule(PriceChangeTrigger("wbtc", -0.10), ActionType.WITHDRAW, "wbtc", fraction=0.5),
+        ]
+    )
+
+    # Leveraged borrower: supplies wbtc, borrows usdc, repays when the health factor gets low
+    leveraged_borrower = RuleBasedStrategy(
+        [
+            Rule(BlockIntervalTrigger(every=10), ActionType.SUPPLY, "wbtc", fraction=1.0),
+            Rule(BlockIntervalTrigger(every=10), ActionType.BORROW, "usdc", fraction=0.5),
+            Rule(HealthFactorTrigger(below=1.3), ActionType.REPAY, "usdc", fraction=1.0),
+        ],
+        min_health_factor=1.2,
+    )
+
+    # Rotator: keeps wbtc supplied, moves half of it into the usdc pool on every 5% drop
+    rotator = RuleBasedStrategy(
+        [
+            Rule(BlockIntervalTrigger(every=1), ActionType.SUPPLY, "wbtc", fraction=1.0),
+            Rule(
+                PriceChangeTrigger("wbtc", -0.05),
+                ActionType.TRANSFER,
+                "wbtc",
+                fraction=0.5,
+                target_pool="usdc",
+            ),
+        ]
+    )
+
+    # 3: create agents. Strategies can be shared: stateful triggers keep state per agent name
+    # Passive liquidity provider with no strategy, supplies once so there is usdc to borrow
+    whale = Agent("whale", defi_env, initial_endowment={usdc: 5_000_000, wbtc: 100})
+    whale.enact_strategy(
+        extra_actions=[
+            Action(ActionType.SUPPLY, usdc_pool, 5_000_000),
+            Action(ActionType.SUPPLY, wbtc_pool, 100),
+        ]
+    )
+
+    agents = [whale]
+    agents += [
+        Agent(f"contrarian_{i}", defi_env, strategy=contrarian, initial_endowment={wbtc: 1, usdc: 20_000})
+        for i in range(3)
+    ]
+    agents += [
+        Agent(f"panic_{i}", defi_env, strategy=panic_withdrawer, initial_endowment={wbtc: 2})
+        for i in range(3)
+    ]
+    agents += [
+        Agent(f"borrower_{i}", defi_env, strategy=leveraged_borrower, initial_endowment={wbtc: 1})
+        for i in range(2)
+    ]
+    agents += [Agent("rotator", defi_env, strategy=rotator, initial_endowment={wbtc: 1})]
+    agents += [
+        Agent(
+            f"random_{i}",
+            defi_env,
+            strategy=RandomStrategy(activity_probability=0.2, seed=i),
+            initial_endowment={wbtc: 0.5, usdc: 10_000},
+        )
+        for i in range(3)
+    ]
+
+    # 4: run a short simulation: noisy wbtc price for 150 blocks, then a ~25% crash
+    rng = random.Random(42)
+    price = defi_env.prices["wbtc"]
+    for step in range(200):
+        drift = -0.006 if step >= 150 else 0.0
+        price *= 1 + drift + rng.gauss(0, 0.005)
+        defi_env.advance_blocks(1, new_prices={"usdc": 1.00, "wbtc": price})
+        for agent in agents:
+            agent.enact_strategy()
+            agent.record_state()
+
+    # 5: summary
+    print(f"Final wbtc price: {price:,.2f}\n")
+    print(f"{'agent':<14}{'txs':>5}{'failed':>8}{'supplied $':>16}{'borrowed $':>14}{'HF':>8}")
+    for agent in agents:
+        # TODO: For actual simulation, shuffle agent list order for each step
+        failed = sum(not tx.success for tx in agent.transactions)
+        state = agent.history[-1]
+        print(
+            f"{agent.name:<14}{len(agent.transactions):>5}{failed:>8}"
+            f"{state['total_supplied_usd']:>16,.2f}{state['total_borrowed_usd']:>14,.2f}"
+            f"{state['health_factor']:>8.3f}"
+        )
+
+    for name in ("rotator", "borrower_0"):
+        print(f"\nLast transactions of {name}:")
+        agent = next(a for a in agents if a.name == name)
+        for tx in agent.transactions[-4:]:
+            print("  ", tx.to_dict())
