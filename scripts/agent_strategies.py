@@ -209,13 +209,17 @@ class Strategy(ABC):
             return max(0.0, min(amount, pool.available_liquidity_cash, pool.borrow_room))
 
         if kind in (ActionType.WITHDRAW, ActionType.TRANSFER):
+            if kind is ActionType.WITHDRAW:
+                safe_amount = self._max_safe_withdraw(wallet, pool)
+            else:
+                assert target_pool is not None and target_pool is not pool, "Transfer needs a different target_pool"
+                safe_amount = self._max_safe_transfer(wallet, pool, target_pool)
             amount = min(
                 pool.get_actual_supply_balance(wallet),
                 pool.available_liquidity_cash,
-                self._max_safe_withdraw(wallet, pool),
+                safe_amount,
             )
             if kind is ActionType.TRANSFER:
-                assert target_pool is not None and target_pool is not pool, "Transfer needs a different target_pool"
                 price_ratio = target_pool.underlying_token.price / pool.underlying_token.price
                 amount = min(amount, target_pool.supply_room * price_ratio)
             # Tiny haircut: withdrawing the exact full balance can fail the aToken burn on float rounding
@@ -240,11 +244,22 @@ class Strategy(ABC):
 
     def _max_safe_withdraw(self, wallet: Wallet, pool: LendingPool) -> float:
         # HF = weighted_collateral / debt  ->  solve for withdrawal x keeping HF >= min_health_factor
+        # Ensures sufficient health factor after completion of swap. Allows large collateral swaps simulating the use of flash loans in AAVE
         debt_usd = wallet.total_borrowed_usd
         if debt_usd == 0:
             return pool.get_actual_supply_balance(wallet)
         excess_usd = wallet.weighted_collateral_usd - self.min_health_factor * debt_usd
         return max(0.0, excess_usd / (pool.underlying_token.price * pool.liquidation_threshold))
+
+    def _max_safe_transfer(self, wallet: Wallet, pool: LendingPool, target_pool: LendingPool) -> float:
+        # The swapped value is re-supplied, so a transfer of USD value v only changes the weighted
+        # collateral by v * (target LT - source LT)  ->  solve for x keeping HF >= min_health_factor
+        debt_usd = wallet.total_borrowed_usd
+        threshold_drop = pool.liquidation_threshold - target_pool.liquidation_threshold
+        if debt_usd == 0 or threshold_drop <= 0:
+            return pool.get_actual_supply_balance(wallet)  # HF can't fall
+        excess_usd = wallet.weighted_collateral_usd - self.min_health_factor * debt_usd
+        return max(0.0, excess_usd / (pool.underlying_token.price * threshold_drop))
 
 
 @dataclass
@@ -432,18 +447,32 @@ class Agent:
             # ActionType values match the Wallet method names (supply, withdraw, borrow, repay)
             getattr(self.wallet, action.kind.value)(action.pool, action.amount)
             return None
-        self.wallet.withdraw(action.pool, action.amount)
-        received = self._swap(
-            action.pool.underlying_token, action.target_pool.underlying_token, action.amount
-        )
-        self.wallet.supply(action.target_pool, received)
-        return received
+        return self._swap_collateral(action.pool, action.target_pool, action.amount)
 
-    def _swap(self, sell: Token, buy: Token, amount: float) -> float:
-        """Idealised swap at oracle prices (no DEX, no slippage or fees)."""
+    def _swap_collateral(self, pool: LendingPool, target_pool: LendingPool, amount: float) -> float:
+        """
+        Atomic collateral swap, like Aave's flash-loan based one: the bought tokens are supplied
+        before the sold ones are withdrawn, so only the health factor after the whole swap matters.
+        Idealised swap at oracle prices (no DEX, no slippage or fees). Returns the amount supplied.
+        """
+        sell, buy = pool.underlying_token, target_pool.underlying_token
         received = amount * sell.price / buy.price
-        sell.burn(self.wallet, amount)
+
+        # Check everything up front, so a rejected swap leaves no partial state behind
+        hf_after = self.wallet.health_factor_after(
+            collateral_change={pool.a_token: -amount, target_pool.a_token: received}
+        )
+        assert hf_after > 1, f"Transfer would cause liquidation risk -- Health factor after transaction = {hf_after}"
+        assert pool.get_actual_supply_balance(self.wallet) >= amount, (
+            f"Wallet '{self.wallet.name}' does not have sufficient {pool.a_token.symbol} for transaction"
+        )
+        assert pool.available_liquidity_cash >= amount, f"{sell.symbol} pool does not have enough liquidity"
+        assert received <= target_pool.supply_room, "Transaction exceeds pool's supply cap"
+
         buy.mint(self.wallet, received)
+        self.wallet.supply(target_pool, received)
+        self.wallet.withdraw(pool, amount)
+        sell.burn(self.wallet, amount)
         return received
 
     def record_state(self) -> dict:
